@@ -16,7 +16,7 @@ docker build -t sidewalk-tagger-api .
 
 CPU Version:
 ```bash
-docker run -p 5000:5000 sidewalk-tagger-api
+docker run -d -p 5000:5000 sidewalk-tagger-api
 ```
 GPU Version:
 ```bash
