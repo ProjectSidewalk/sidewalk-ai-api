@@ -4,6 +4,8 @@ This serves as an API reimplementation of the [sidewalk-tagger-ai](https://githu
 
 ## Requirements
 - Docker
+- NVIDIA GPU drivers **(only if you are using GPU Version)**
+  - If you aren't sure whether you have these, check if the `nvidia-smi` command works
 - NVIDIA Container Toolkit for Docker **(only if you are using GPU Version)**
   - https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
   - Don't forget [this step!!](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html#configuring-docker)
