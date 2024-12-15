@@ -1,0 +1,63 @@
+{
+    "crosswalk": [
+        "brick-cobblestone",
+        "broken-surface",
+        "bumpy",
+        "level-with-sidewalk",
+        "no-pedestrian-priority",
+        "paint-fading",
+        "rail-tram-track",
+        "too-close-to-traffic",
+        "uneven-surface",
+        "very-long-crossing"
+    ],
+    "curbramp": [
+        "missing-tactile-warning",
+        "narrow",
+        "not-enough-landing-space",
+        "not-level-with-street",
+        "parallel-lines",
+        "points-into-traffic",
+        "pooled-water",
+        "steep",
+        "surface-problem",
+        "tactile-warning"
+    ],
+    "obstacle": [
+        "construction",
+        "fire-hydrant",
+        "garage-entrance",
+        "height-difference",
+        "litter-garbage",
+        "narrow",
+        "outdoor-dining-area",
+        "parked-bike",
+        "parked-car",
+        "parked-scooter-motorcycle",
+        "pole",
+        "sign",
+        "stairs",
+        "street-vendor",
+        "trash-recycling-can",
+        "tree",
+        "vegetation",
+        "mailbox",
+        "seating",
+        "uneven-slanted"
+    ],
+    "surfaceproblem": [
+        "brick-cobblestone",
+        "bumpy",
+        "construction",
+        "cracks",
+        "grass",
+        "height-difference",
+        "narrow-sidewalk",
+        "rail-tram-track",
+        "sand-gravel",
+        "uncovered-manhole",
+        "uneven-slanted",
+        "utility-panel",
+        "very-broken"
+    ]
+}

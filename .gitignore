@@ -1,3 +1,8 @@
+dinov2_vitb14_reg4_pretrain.pth
+models/*
+
+.conda
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
