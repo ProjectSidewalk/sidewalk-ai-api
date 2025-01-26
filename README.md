@@ -24,6 +24,12 @@ This serves as an API implementation of the Project Sidewalk AI models for [tagg
 - A good amount of disk space - the docker image is quite large
 - Lots of VRAM (9-10 GB MINIMUM)
 
+### After cloning, don't forget to download the submodules
+```bash
+git submodule init
+git submodule update
+```
+
 ## Build
 
 ```bash
