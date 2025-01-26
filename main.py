@@ -26,14 +26,15 @@ def process():
         return jsonify({"error": "Missing x parameter"}), 400
     if "y" not in request.form:
         return jsonify({"error": "Missing y parameter"}), 400
+
     label_x = float(request.form["x"])
     label_y = float(request.form["y"])
     if label_x < 0 or label_x > 1 or label_y < 0 or label_y > 1:
         return jsonify({"error": "x and y must be between 0 and 1. They should be normalized values."}), 400
-    
+
     label_type = request.form["label_type"]
-    if label_type not in taggers:
-        return jsonify({"error": f"Invalid label_type. Choose from {TAGGER_LABEL_TYPES}"}), 400
+    if label_type not in VALIDATOR_LABEL_TYPES:
+        return jsonify({"error": f"Invalid label_type. Choose from {VALIDATOR_LABEL_TYPES}"}), 400
 
     panorama = Panorama(request.form["panorama_id"])
     height, width = panorama.panorama_image.shape[:2]
@@ -63,19 +64,26 @@ def process():
     perspective_image = cv2.cvtColor(perspective_image, cv2.COLOR_BGR2RGB)
     perspective_image = Image.fromarray(perspective_image)
 
-    classifier = taggers[label_type]
-    try:
-        result, probabilities = classifier.inference(perspective_image)
-    except Exception as e:
-        return jsonify({"error": f"Inference error: {str(e)}"}), 500
-    
+    response = {"label_type": label_type}
+
+    # Perform tagging inference only if label_type is in TAGGER_LABEL_TYPES
+    if label_type in TAGGER_LABEL_TYPES:
+        classifier = taggers[label_type]
+        try:
+            result, probabilities = classifier.inference(perspective_image)
+            response.update({"tags": result, "tag_scores": probabilities})
+        except Exception as e:
+            return jsonify({"error": f"Inference error: {str(e)}"}), 500
+
+    # Perform validation if label_type is in VALIDATOR_LABEL_TYPES
     validator = validators[label_type]
     try:
         validation_result, validation_confidence = validator.validate(perspective_image)
+        response.update({"validation_result": validation_result, "validation_score": validation_confidence})
     except Exception as e:
         return jsonify({"error": f"Validation error: {str(e)}"}), 500
 
-    return jsonify({"label_type": label_type, "tags": result, "tag_scores": probabilities, "validation_result": validation_result, "validation_score": validation_confidence}), 200
+    return jsonify(response), 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)

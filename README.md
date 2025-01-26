@@ -1,32 +1,60 @@
-# sidewalk-tagger-api
 
-This serves as an API reimplementation of the [sidewalk-tagger-ai](https://github.com/ProjectSidewalk/sidewalk-tagger-ai) project, which aims to predict tags for Project Sidewalk label crops.
+# sidewalk-ai-api
+
+  
+
+This serves as an API implementation of the Project Sidewalk AI models for [tagging](https://huggingface.co/projectsidewalk/sidewalk-tagger-ai-models) and [validating](https://huggingface.co/collections/johnomeara/project-sidewalk-validator-ai-models-6795e885c35b60799b034003) labels.
+
+  
 
 ## Requirements
-- Docker
-- NVIDIA GPU drivers **(only if you are using GPU Version)**
-  - If you aren't sure whether you have these, check if the `nvidia-smi` command works
-- NVIDIA Container Toolkit for Docker **(only if you are using GPU Version)**
-  - https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
-  - Don't forget [this step!!](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html#configuring-docker)
-- A good amount of disk space - the docker image is quite large
-## Build
-```bash
-docker build -t sidewalk-tagger-api .
-```
-## Run
 
-CPU Version:
+- Docker
+
+- NVIDIA GPU drivers
+
+	- If you aren't sure whether you have these, check if the `nvidia-smi` command works
+
+- NVIDIA Container Toolkit for Docker
+
+	- https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
+
+	- Don't forget [this step!!](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html#configuring-docker)
+
+- A good amount of disk space - the docker image is quite large
+- Lots of VRAM (9-10 GB MINIMUM)
+
+## Build
+
 ```bash
-docker run -d -p 5000:5000 sidewalk-tagger-api
+
+docker  build  -t  sidewalk-ai-api  .
+
 ```
-GPU Version:
+
+## Run
 ```bash
-docker run --gpus all --runtime nvidia -d -p 5000:5000 sidewalk-tagger-api
+
+docker  run  --gpus  all  --runtime  nvidia  -d  -p  5000:5000  sidewalk-ai-api
+
 ```
+
+  
 
 ## Try an example
+
 ```bash
-curl -X POST -F "label_type=curbramp" -F "panorama_id=3-WpZU8MDYwe_9edeLw30w" -F "x=0.18981933593" -F "y=0.63134765625" http://127.0.0.1:5000/process
+
+curl  -X  POST  -F  "label_type=curbramp"  -F  "panorama_id=3-WpZU8MDYwe_9edeLw30w"  -F  "x=0.18981933593"  -F  "y=0.63134765625"  http://127.0.0.1:5000/process
+
 ```
-> ```{"label_type":"curbramp","tag_probabilities":{"missing-tactile-warning":0.9999897480010986,"narrow":1.4236595688998932e-06,"not-enough-landing-space":1.0658299061105936e-06,"not-level-with-street":2.5866484065772966e-08,"parallel-lines":1.123407307516129e-17,"points-into-traffic":0.011831503361463547,"pooled-water":3.2974125474538596e-07,"steep":1.8578341496322537e-06,"surface-problem":4.7534200575682917e-08,"tactile-warning":1.781248215593223e-07},"tags":["missing-tactile-warning"]} ```
+
+>  ```{"label_type":"curbramp","tag_scores":{"missing-tactile-warning":0.9999904632568359,"narrow":2.0490285805863095e-06,"not-enough-landing-space":9.689169928606134e-07,"not-level-with-street":2.722915048991581e-08,"parallel-lines":8.671155690381078e-18,"points-into-traffic":0.0051573594100773335,"pooled-water":2.6774074513014057e-07,"steep":1.7215750176546862e-06,"surface-problem":4.324794744547944e-08,"tactile-warning":1.704332674989928e-07},"tags":["missing-tactile-warning"],"validation_result":"correct","validation_score":0.9998575448989868} ```
+
+Please note that `tag_scores` and `tags` will not be returned if the `label_type` does not match the following:
+`["crosswalk", "curbramp", "obstacle", "surfaceproblem"]`
+
+Likewise, `validation_result` and `validation_score` will not be returned if the `label_type` does not match the following:
+`["crosswalk", "curbramp", "obstacle", "surfaceproblem", "nocurbramp"]`
+
+This is because we do not have models for other label types yet.
