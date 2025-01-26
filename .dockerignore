@@ -1,7 +1,5 @@
 .git
 
-checkpoints/*
-
 .conda
 
 # Byte-compiled / optimized / DLL files
