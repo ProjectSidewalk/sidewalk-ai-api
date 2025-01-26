@@ -25,8 +25,8 @@ GPU Version:
 docker run --gpus all --runtime nvidia -d -p 5000:5000 sidewalk-tagger-api
 ```
 
-## Try an example image
+## Try an example
 ```bash
-curl -X POST -F "label_type=curbramp" -F "image=@test_image_2.png" http://127.0.0.1:5000/classify
+curl -X POST -F "label_type=curbramp" -F "panorama_id=3-WpZU8MDYwe_9edeLw30w" -F "x=0.18981933593" -F "y=0.63134765625" http://127.0.0.1:5000/process
 ```
-> ```{"label_type":"curbramp","probabilities":{"missing-tactile-warning":0.9993209838867188,"narrow":5.09270466864109e-06,"not-enough-landing-space":1.2457426237233449e-06,"not-level-with-street":2.72767948672481e-07,"parallel-lines":3.4737886575527825e-17,"points-into-traffic":0.003298011841252446,"pooled-water":1.511450591351604e-07,"steep":1.2110045588542562e-07,"surface-problem":1.1465004234878506e-07,"tactile-warning":1.4279058291322144e-07},"result":["missing-tactile-warning"]} ```
+> ```{"label_type":"curbramp","tag_probabilities":{"missing-tactile-warning":0.9999897480010986,"narrow":1.4236595688998932e-06,"not-enough-landing-space":1.0658299061105936e-06,"not-level-with-street":2.5866484065772966e-08,"parallel-lines":1.123407307516129e-17,"points-into-traffic":0.011831503361463547,"pooled-water":3.2974125474538596e-07,"steep":1.8578341496322537e-06,"surface-problem":4.7534200575682917e-08,"tactile-warning":1.781248215593223e-07},"tags":["missing-tactile-warning"]} ```

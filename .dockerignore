@@ -1,7 +1,6 @@
 .git
 
-dinov2_vitb14_reg4_pretrain.pth
-models/*
+checkpoints/*
 
 .conda
 
