@@ -55,12 +55,12 @@ curl  -X  POST  -F  "label_type=curbramp"  -F  "panorama_id=3-WpZU8MDYwe_9edeLw3
 
 ```
 
->  ```{"label_type":"curbramp","tag_scores":{"missing-tactile-warning":0.9999904632568359,"narrow":2.0490285805863095e-06,"not-enough-landing-space":9.689169928606134e-07,"not-level-with-street":2.722915048991581e-08,"parallel-lines":8.671155690381078e-18,"points-into-traffic":0.0051573594100773335,"pooled-water":2.6774074513014057e-07,"steep":1.7215750176546862e-06,"surface-problem":4.324794744547944e-08,"tactile-warning":1.704332674989928e-07},"tags":["missing-tactile-warning"],"validation_result":"correct","validation_score":0.9998575448989868} ```
+>  ```{"label_type":"curbramp","tag_scores":{"missing-tactile-warning":0.9999904632568359,"narrow":2.0490285805863095e-06,"not-enough-landing-space":9.689169928606134e-07,"not-level-with-street":2.722915048991581e-08,"parallel-lines":8.671155690381078e-18,"points-into-traffic":0.0051573594100773335,"pooled-water":2.6774074513014057e-07,"steep":1.7215750176546862e-06,"surface-problem":4.324794744547944e-08,"tactile-warning":1.704332674989928e-07},"tags":["missing-tactile-warning"],"validation_estimated_accuracy":0.941747572815534,"validation_result":"correct","validation_score":0.9998575448989868} ```
 
 Please note that `tag_scores` and `tags` will not be returned if the `label_type` does not match the following:
 `["crosswalk", "curbramp", "obstacle", "surfaceproblem"]`
 
-Likewise, `validation_result` and `validation_score` will not be returned if the `label_type` does not match the following:
+Likewise, `validation_result`, `validation_score`, and `validation_estimated_accuracy` will not be returned if the `label_type` does not match the following:
 `["crosswalk", "curbramp", "obstacle", "surfaceproblem", "nocurbramp"]`
 
 This is because we do not have models for other label types yet.
