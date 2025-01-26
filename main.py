@@ -5,6 +5,7 @@ from PIL import Image
 from sidewalk_ai_api.panorama import Panorama
 from sidewalk_ai_api.depthanything import DepthAnythingPredictor
 import cv2
+import json
 
 app = Flask(__name__)
 
@@ -15,6 +16,8 @@ taggers = {label_type: ImageTagger(label_type=label_type) for label_type in TAGG
 
 VALIDATOR_LABEL_TYPES = ["crosswalk", "curbramp", "obstacle", "surfaceproblem", "nocurbramp"]
 validators = {label_type: ImageValidator(label_type=label_type) for label_type in VALIDATOR_LABEL_TYPES}
+accuracy_mappings = {label_type: json.load(open(f"accuracy_mappings/{label_type}.json")) 
+                 for label_type in VALIDATOR_LABEL_TYPES}
 
 @app.route("/process", methods=["POST"])
 def process():
@@ -79,9 +82,20 @@ def process():
     validator = validators[label_type]
     try:
         validation_result, validation_confidence = validator.validate(perspective_image)
-        response.update({"validation_result": validation_result, "validation_score": validation_confidence})
+        
+        # Find the highest mapping that's less than or equal to the confidence
+        accuracy = 0
+        for threshold, acc in accuracy_mappings[label_type][validation_result].items():
+            if float(threshold) <= validation_confidence:
+                accuracy = acc
+        
+        response.update({
+            "validation_result": validation_result,
+            "validation_score": validation_confidence,
+            "validation_estimated_accuracy": accuracy
+        })
     except Exception as e:
-        return jsonify({"error": f"Validation error: {str(e)}"}), 500
+        return jsonify({"error": f"validation error: {str(e)}"}), 500
 
     return jsonify(response), 200
 
