@@ -51,10 +51,10 @@ docker  run  --gpus  all  --runtime  nvidia  -d  -p  5000:5000  sidewalk-ai-api
 
 ```bash
 
-curl  -X  POST  -F  "label_type=curbramp"  -F  "panorama_id=3-WpZU8MDYwe_9edeLw30w"  -F  "x=0.18981933593"  -F  "y=0.63134765625"  http://127.0.0.1:5000/process
+curl -X POST -F "label_type=curbramp" -F "panorama_id=3-WpZU8MDYwe_9edeLw30w" -F "x=0.18981933593" -F "y=0.63134765625" http://127.0.0.1:5000/process
 
 ```
-
+Please note that x and y are normalized coordinates (between 0 and 1) on the equirectangular image.
 >  ```{"label_type":"curbramp","tag_scores":{"missing-tactile-warning":0.9999904632568359,"narrow":2.0490285805863095e-06,"not-enough-landing-space":9.689169928606134e-07,"not-level-with-street":2.722915048991581e-08,"parallel-lines":8.671155690381078e-18,"points-into-traffic":0.0051573594100773335,"pooled-water":2.6774074513014057e-07,"steep":1.7215750176546862e-06,"surface-problem":4.324794744547944e-08,"tactile-warning":1.704332674989928e-07},"tags":["missing-tactile-warning"],"validation_estimated_accuracy":0.941747572815534,"validation_result":"correct","validation_score":0.9998575448989868} ```
 
 Please note that `tag_scores` and `tags` will not be returned if the `label_type` does not match the following:
