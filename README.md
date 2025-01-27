@@ -3,7 +3,7 @@
 
   
 
-This serves as an API implementation of the Project Sidewalk AI models for [tagging](https://huggingface.co/projectsidewalk/sidewalk-tagger-ai-models) and [validating](https://huggingface.co/collections/johnomeara/project-sidewalk-validator-ai-models-6795e885c35b60799b034003) labels.
+This serves as an API implementation of the Project Sidewalk AI models for [tagging](https://huggingface.co/projectsidewalk/sidewalk-tagger-ai-models) and [validating](https://huggingface.co/collections/projectsidewalk/project-sidewalk-validator-models-6797bd158d5e385e464dbe45) labels.
 
   
 

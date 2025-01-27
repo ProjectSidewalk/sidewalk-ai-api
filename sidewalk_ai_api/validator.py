@@ -6,8 +6,8 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 class ImageValidator:
     def __init__(self, label_type: str):
-        self.image_processor = AutoImageProcessor.from_pretrained(f"johnomeara/sidewalk-validator-ai-{label_type}")
-        self.model = AutoModelForImageClassification.from_pretrained(f"johnomeara/sidewalk-validator-ai-{label_type}").to(DEVICE)
+        self.image_processor = AutoImageProcessor.from_pretrained(f"projectsidewalk/sidewalk-validator-ai-{label_type}")
+        self.model = AutoModelForImageClassification.from_pretrained(f"projectsidewalk/sidewalk-validator-ai-{label_type}").to(DEVICE)
     
     def validate(self, image):
         inputs = self.image_processor(image, return_tensors="pt").to(DEVICE)
