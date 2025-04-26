@@ -30,6 +30,11 @@ git submodule init
 git submodule update
 ```
 
+## Download checkpoints
+```bash
+./download_models.sh
+```
+
 ## Build
 
 ```bash
