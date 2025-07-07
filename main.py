@@ -19,6 +19,9 @@ validators = {label_type: ImageValidator(label_type=label_type) for label_type i
 accuracy_mappings = {label_type: json.load(open(f"accuracy_mappings/{label_type}.json")) 
                  for label_type in VALIDATOR_LABEL_TYPES}
 
+with open('API_VERSION', 'r') as file:
+    API_VERSION = file.read().strip()
+
 @app.route("/process", methods=["POST"])
 def process():
     if "label_type" not in request.form:
@@ -97,6 +100,9 @@ def process():
     except Exception as e:
         return jsonify({"error": f"validation error: {str(e)}"}), 500
 
+    response.update({
+        "api_version": API_VERSION
+    })
     return jsonify(response), 200
 
 if __name__ == "__main__":
