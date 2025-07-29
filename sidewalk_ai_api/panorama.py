@@ -86,14 +86,22 @@ class Panorama:
         self._fetch_panorama()
 
     def _fetch_tile(self, x, y, zoom=4):
-        url = f"https://streetviewpixels-pa.googleapis.com/v1/tile?cb_client=maps_sv.tactile&panoid={self.pano_id}&x={x}&y={y}&zoom={zoom}"
-        try:
-            response = requests.get(url)
-            if response.status_code == 200:
-                return x, y, Image.open(io.BytesIO(response.content))
-            return x, y, None
-        except Exception:
-            return x, y, None
+        for z in (zoom, 3):
+            url = (
+                "https://streetviewpixels-pa.googleapis.com/v1/tile"
+                f"?cb_client=maps_sv.tactile"
+                f"&panoid={self.pano_id}"
+                f"&x={x}&y={y}&zoom={z}"
+            )
+            try:
+                response = requests.get(url)
+                if response.status_code == 200:
+                    img = Image.open(io.BytesIO(response.content))
+                    return x, y, img
+            except Exception:
+                pass
+    
+        return x, y, None
 
     def _is_black_tile(self, tile):
         if tile is None:
