@@ -83,9 +83,13 @@ class Panorama:
     def __init__(self, pano_id):
         self.pano_id = pano_id
         self.panorama_image = None
+        self.zoom = None
         self._fetch_panorama()
 
-    def _fetch_tile(x, y, zoom=4):
+    def _fetch_tile(self, x, y, zoom=4):
+        if self.zoom != None:
+            zoom = self.zoom
+        
         url = (
             f"https://streetviewpixels-pa.googleapis.com/v1/tile"
             f"?cb_client=maps_sv.tactile&panoid={self.pano_id}"
@@ -100,19 +104,21 @@ class Panorama:
         except Exception:
             return x, y, None
 
-        # Try fallback with zoom=3
-        fallback_url = (
-            f"https://streetviewpixels-pa.googleapis.com/v1/tile"
-            f"?cb_client=maps_sv.tactile&panoid={self.pano_id}"
-            f"&x={x}&y={y}&zoom=3"
-        )
-        try:
-            response = requests.get(fallback_url)
-            if response.status_code == 200:
-                tile = Image.open(io.BytesIO(response.content))
-                return x, y, tile
-        except Exception:
-            pass
+        if self.zoom == None:
+            # Try fallback with zoom=3
+            fallback_url = (
+                f"https://streetviewpixels-pa.googleapis.com/v1/tile"
+                f"?cb_client=maps_sv.tactile&panoid={self.pano_id}"
+                f"&x={x}&y={y}&zoom=3"
+            )
+            try:
+                response = requests.get(fallback_url)
+                if response.status_code == 200:
+                    tile = Image.open(io.BytesIO(response.content))
+                    self.zoom = 3
+                    return x, y, tile
+            except Exception:
+                pass
 
         return x, y, None
 
