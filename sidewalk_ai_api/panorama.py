@@ -86,6 +86,12 @@ class Panorama:
         self.zoom = None
         self._fetch_panorama()
 
+    def _is_black_tile(self, tile):
+        if tile is None:
+            return True
+        tile_array = np.array(tile)
+        return np.all(tile_array == 0)
+
     def _fetch_tile(self, x, y, zoom=4):
         if self.zoom != None:
             zoom = self.zoom
@@ -99,10 +105,11 @@ class Panorama:
             response = requests.get(url)
             if response.status_code == 200:
                 tile = Image.open(io.BytesIO(response.content))
-                if not _is_black_tile(tile):
+                if self.zoom != None or not self._is_black_tile(tile):
+                    self.zoom = zoom
                     return x, y, tile
-        except Exception:
-            return x, y, None
+        except Exception as e:
+            print(e)
 
         if self.zoom == None:
             # Try fallback with zoom=3
@@ -117,16 +124,10 @@ class Panorama:
                     tile = Image.open(io.BytesIO(response.content))
                     self.zoom = 3
                     return x, y, tile
-            except Exception:
-                pass
+            except Exception as e:
+                print(e)
 
         return x, y, None
-
-    def _is_black_tile(self, tile):
-        if tile is None:
-            return True
-        tile_array = np.array(tile)
-        return np.all(tile_array == 0)
 
     def _find_panorama_dimensions(self):
         tiles_cache = {}
