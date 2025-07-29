@@ -85,22 +85,35 @@ class Panorama:
         self.panorama_image = None
         self._fetch_panorama()
 
-    def _fetch_tile(self, x, y, zoom=4):
-        for z in (zoom, 3):
-            url = (
-                "https://streetviewpixels-pa.googleapis.com/v1/tile"
-                f"?cb_client=maps_sv.tactile"
-                f"&panoid={self.pano_id}"
-                f"&x={x}&y={y}&zoom={z}"
-            )
-            try:
-                response = requests.get(url)
-                if response.status_code == 200:
-                    img = Image.open(io.BytesIO(response.content))
-                    return x, y, img
-            except Exception:
-                pass
-    
+    def _fetch_tile(x, y, zoom=4):
+        url = (
+            f"https://streetviewpixels-pa.googleapis.com/v1/tile"
+            f"?cb_client=maps_sv.tactile&panoid={self.pano_id}"
+            f"&x={x}&y={y}&zoom={zoom}"
+        )
+        try:
+            response = requests.get(url)
+            if response.status_code == 200:
+                tile = Image.open(io.BytesIO(response.content))
+                if not _is_black_tile(tile):
+                    return x, y, tile
+        except Exception:
+            return x, y, None
+
+        # Try fallback with zoom=3
+        fallback_url = (
+            f"https://streetviewpixels-pa.googleapis.com/v1/tile"
+            f"?cb_client=maps_sv.tactile&panoid={self.pano_id}"
+            f"&x={x}&y={y}&zoom=3"
+        )
+        try:
+            response = requests.get(fallback_url)
+            if response.status_code == 200:
+                tile = Image.open(io.BytesIO(response.content))
+                return x, y, tile
+        except Exception:
+            pass
+
         return x, y, None
 
     def _is_black_tile(self, tile):
