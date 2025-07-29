@@ -1,2 +1,0 @@
-python -c "import torch; print('Installing xformers...' if torch.cuda.is_available() else 'Skipping xformers installation')" && (python -c "import torch; import sys; sys.exit(0 if torch.cuda.is_available() else 1)" && pip install xformers --index-url https://download.pytorch.org/whl/cu118 || echo 'No GPU detected, skipping xformers installation')
-gunicorn -w 1 -b 0.0.0.0:5000 main:app
