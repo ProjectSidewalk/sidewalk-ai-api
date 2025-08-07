@@ -4,6 +4,7 @@ from sidewalk_ai_api.validator import ImageValidator
 from PIL import Image
 from sidewalk_ai_api.panorama import Panorama
 from sidewalk_ai_api.depthanything import DepthAnythingPredictor
+from sidewalk_ai_api.model_map import MODEL_MAP
 import cv2
 import json
 
@@ -77,7 +78,7 @@ def process():
         classifier = taggers[label_type]
         try:
             result, probabilities = classifier.inference(perspective_image)
-            response.update({"tags": result, "tag_scores": probabilities})
+            response.update({"tags": result, "tag_scores": probabilities, "tagger_model_id": MODEL_MAP["tagger_models"][label_type]["model_id"], "tagger_training_date": MODEL_MAP["tagger_models"][label_type]["training_date"]})
         except Exception as e:
             return jsonify({"error": f"Inference error: {str(e)}"}), 500
 
@@ -95,7 +96,9 @@ def process():
         response.update({
             "validation_result": validation_result,
             "validation_score": validation_confidence,
-            "validation_estimated_accuracy": accuracy
+            "validation_estimated_accuracy": accuracy,
+            "validator_model_id": MODEL_MAP["validator_models"][label_type]["model_id"],
+            "validator_training_date": MODEL_MAP["validator_models"][label_type]["training_date"]
         })
     except Exception as e:
         return jsonify({"error": f"validation error: {str(e)}"}), 500
