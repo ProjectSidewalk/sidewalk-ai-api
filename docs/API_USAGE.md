@@ -1,6 +1,6 @@
 # API Usage
 
-This document provides a guide to using Project Sidewalk's AI API. The API allows one to programmatically validate and analyze Project Sidewalk labels.
+This document provides a guide to using Project Sidewalk's AI API. We use this internally for AI auto validations and tagging.
 
 ## Process a Label
 
