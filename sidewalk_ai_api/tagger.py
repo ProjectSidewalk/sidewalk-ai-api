@@ -101,10 +101,10 @@ class ImageTagger:
             confidence_scores = torch.sigmoid(output_tensor)
             results = dict(zip(self.tag_names, confidence_scores.tolist()[0]))
 
-        # Apply per-tag thresholds; NULL-placeholder entries are absent from tag_thresholds and are ignored.
+        # Apply per-tag thresholds; tags with both null still appear in scores but not in present/absent lists.
         tags_present = []
         tags_not_present = []
-        scores = {}
+        scores = {tag: results[tag] for tag in self.tag_thresholds if tag in results}
         for tag, thresholds in self.tag_thresholds.items():
             present_threshold = thresholds.get("present")
             absent_threshold = thresholds.get("absent")
@@ -113,7 +113,6 @@ class ImageTagger:
             if tag not in results:
                 continue
             prob = results[tag]
-            scores[tag] = prob
             if present_threshold is not None and prob >= present_threshold:
                 tags_present.append(tag)
             if absent_threshold is not None and prob <= absent_threshold:
