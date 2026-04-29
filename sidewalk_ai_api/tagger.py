@@ -7,8 +7,8 @@ from torchvision import transforms
 from copy import deepcopy
 from dinov2.models.vision_transformer import vit_base
 
-MINIMUM_DETECTION = 0.3
 
+# Resizes to target_size then pads to the nearest multiple so patch_size=14 divides evenly.
 class ResizeAndPad:
     def __init__(self, target_size, multiple):
         self.target_size = target_size
@@ -23,6 +23,7 @@ class ResizeAndPad:
         return img
 
 
+# DINOv2 ViT-base backbone with a two-layer classification head (768 → 256 → nc).
 class DinoVisionTransformerClassifier(nn.Module):
     def __init__(self, model_size="base", nc=0):
         super().__init__()
@@ -56,11 +57,15 @@ class ImageTagger:
         self.img_resize_multiple = 14
         self.target_size = (self.image_dimension, self.image_dimension)
 
-        # Load tag mappings
+        # Load class-index → tag name list (includes NULL placeholders; length determines nc).
         with open('mappings.json', 'r') as f:
             mappings_data = json.load(f)
             self.tag_names = mappings_data[label_type]
         nc = len(self.tag_names)
+
+        # Load per-tag present/absent thresholds; tags with both null are skipped in inference output.
+        with open('tag_thresholds.json', 'r') as f:
+            self.tag_thresholds = json.load(f)[label_type]
 
         # Initialize model
         self.classifier = DinoVisionTransformerClassifier("base", nc)
@@ -88,11 +93,30 @@ class ImageTagger:
     def inference(self, img: Image.Image):
         input_tensor = self._load_img(img).to(self.device)
 
+        # Single forward pass produces a sigmoid score for every class index.
         with torch.no_grad():
             embeddings = self.classifier.transformer(input_tensor)
             x = self.classifier.transformer.norm(embeddings)
             output_tensor = self.classifier.classifier(x)
-            probabilities = torch.sigmoid(output_tensor)
-            results = dict(zip(self.tag_names, probabilities.tolist()[0]))
+            confidence_scores = torch.sigmoid(output_tensor)
+            results = dict(zip(self.tag_names, confidence_scores.tolist()[0]))
 
-        return [tag for tag, prob in results.items() if prob > MINIMUM_DETECTION], results
+        # Apply per-tag thresholds; NULL-placeholder entries are absent from tag_thresholds and are ignored.
+        tags_present = []
+        tags_not_present = []
+        scores = {}
+        for tag, thresholds in self.tag_thresholds.items():
+            present_threshold = thresholds.get("present")
+            absent_threshold = thresholds.get("absent")
+            if present_threshold is None and absent_threshold is None:
+                continue
+            if tag not in results:
+                continue
+            prob = results[tag]
+            scores[tag] = prob
+            if present_threshold is not None and prob >= present_threshold:
+                tags_present.append(tag)
+            if absent_threshold is not None and prob <= absent_threshold:
+                tags_not_present.append(tag)
+
+        return tags_present, tags_not_present, scores

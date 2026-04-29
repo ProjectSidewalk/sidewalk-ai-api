@@ -1,0 +1,54 @@
+{
+    "crosswalk": {
+        "brick/cobblestone": {"present": null, "absent": null},
+        "broken surface": {"present": null, "absent": 0.997941434383392},
+        "bumpy": {"present": null, "absent": 0.000261053384747356},
+        "paint fading": {"present": null, "absent": 0.000167091304319911},
+        "rail/tram track": {"present": null, "absent": null},
+        "uneven surface": {"present": null, "absent": null},
+        "very long crossing": {"present": null, "absent": null}
+    },
+    "curbramp": {
+        "missing tactile warning": {"present": 0.999032616615295, "absent": 0.137371987104416},
+        "narrow": {"present": null, "absent": null},
+        "not enough landing space": {"present": null, "absent": null},
+        "not level with street": {"present": null, "absent": null},
+        "points into traffic": {"present": null, "absent": 0.0000236960186157376},
+        "debris / pooled water": {"present": null, "absent": null},
+        "steep": {"present": null, "absent": null},
+        "surface problem": {"present": null, "absent": 0.0124074257910252}
+    },
+    "obstacle": {
+        "construction": {"present": null, "absent": 0.00129300216212869},
+        "fire hydrant": {"present": null, "absent": null},
+        "height difference": {"present": null, "absent": null},
+        "litter/garbage": {"present": null, "absent": null},
+        "narrow": {"present": null, "absent": null},
+        "parked bike": {"present": null, "absent": null},
+        "parked car": {"present": 0.99954742193222, "absent": 0.415593057870865},
+        "parked scooter/motorcycle": {"present": null, "absent": null},
+        "pole": {"present": null, "absent": 0.538854777812958},
+        "sign": {"present": null, "absent": null},
+        "stairs": {"present": null, "absent": null},
+        "trash/recycling can": {"present": 0.996601343154907, "absent": 0.99326080083847},
+        "tree": {"present": null, "absent": null},
+        "vegetation": {"present": null, "absent": 0.999191462993622},
+        "mailbox": {"present": null, "absent": null},
+        "seating": {"present": null, "absent": null},
+        "uneven/slanted": {"present": null, "absent": null}
+    },
+    "surfaceproblem": {
+        "brick/cobblestone": {"present": 0.460518807172775, "absent": 0.000102744284959044},
+        "bumpy": {"present": null, "absent": null},
+        "construction": {"present": null, "absent": null},
+        "cracks": {"present": null, "absent": null},
+        "grass": {"present": 0.878179550170898, "absent": 0.512212753295898},
+        "height difference": {"present": 0.990894317626953, "absent": 0.0114266304299235},
+        "narrow sidewalk": {"present": null, "absent": null},
+        "rail/tram track": {"present": null, "absent": null},
+        "sand/gravel": {"present": null, "absent": null},
+        "uneven/slanted": {"present": null, "absent": null},
+        "utility panel": {"present": null, "absent": null},
+        "very broken": {"present": null, "absent": null}
+    }
+}

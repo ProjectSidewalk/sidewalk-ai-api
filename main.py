@@ -17,7 +17,7 @@ taggers = {label_type: ImageTagger(label_type=label_type) for label_type in TAGG
 
 VALIDATOR_LABEL_TYPES = ["crosswalk", "curbramp", "obstacle", "surfaceproblem", "nocurbramp"]
 validators = {label_type: ImageValidator(label_type=label_type) for label_type in VALIDATOR_LABEL_TYPES}
-accuracy_mappings = {label_type: json.load(open(f"accuracy_mappings/{label_type}.json")) 
+accuracy_mappings = {label_type: json.load(open(f"accuracy_mappings/{label_type}.json"))
                  for label_type in VALIDATOR_LABEL_TYPES}
 
 with open('API_VERSION', 'r') as file:
@@ -77,8 +77,14 @@ def process():
     if label_type in TAGGER_LABEL_TYPES:
         classifier = taggers[label_type]
         try:
-            result, probabilities = classifier.inference(perspective_image)
-            response.update({"tags": result, "tag_scores": probabilities, "tagger_model_id": MODEL_MAP["tagger_models"][label_type]["model_id"], "tagger_training_date": MODEL_MAP["tagger_models"][label_type]["training_date"]})
+            tags_present, tags_not_present, confidence_scores = classifier.inference(perspective_image)
+            response.update({
+                "tags": tags_present,
+                "tags_not_present": tags_not_present,
+                "tag_scores": confidence_scores,
+                "tagger_model_id": MODEL_MAP["tagger_models"][label_type]["model_id"],
+                "tagger_training_date": MODEL_MAP["tagger_models"][label_type]["training_date"],
+            })
         except Exception as e:
             return jsonify({"error": f"Inference error: {str(e)}"}), 500
 
@@ -86,13 +92,13 @@ def process():
     validator = validators[label_type]
     try:
         validation_result, validation_confidence = validator.validate(perspective_image)
-        
+
         # Find the highest mapping that's less than or equal to the confidence
         accuracy = 0
         for threshold, acc in accuracy_mappings[label_type][validation_result].items():
             if float(threshold) <= validation_confidence:
                 accuracy = acc
-        
+
         response.update({
             "validation_result": validation_result,
             "validation_score": validation_confidence,
