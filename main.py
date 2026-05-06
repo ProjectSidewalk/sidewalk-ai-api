@@ -7,6 +7,9 @@ from sidewalk_ai_api.depthanything import DepthAnythingPredictor
 from sidewalk_ai_api.model_map import MODEL_MAP
 import cv2
 import json
+import os
+
+SCRAPES_DIR = os.environ.get("SIDEWALK_SCRAPES_DIR")
 
 app = Flask(__name__)
 
@@ -43,7 +46,14 @@ def process():
     if label_type not in VALIDATOR_LABEL_TYPES:
         return jsonify({"error": f"Invalid label_type. Choose from {VALIDATOR_LABEL_TYPES}"}), 400
 
-    panorama = Panorama(request.form["panorama_id"])
+    panorama_id = request.form["panorama_id"]
+    city = request.form.get("city")
+
+    cached_image_path = None
+    if SCRAPES_DIR and city and len(panorama_id) >= 2:
+        cached_image_path = os.path.join(SCRAPES_DIR, f"scrapes_dump_{city}", panorama_id[:2], f"{panorama_id}.jpg")
+
+    panorama = Panorama(panorama_id, cached_image_path=cached_image_path)
     height, width = panorama.panorama_image.shape[:2]
     theta, phi = panorama.get_perspective_center_params(label_x * width, label_y * height)
     perspective_image = panorama.to_perspective_image(90, theta, phi, width // 4, width // 4)

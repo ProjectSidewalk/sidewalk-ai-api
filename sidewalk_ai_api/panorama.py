@@ -1,3 +1,5 @@
+import os
+import time
 import requests
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -80,11 +82,33 @@ def get_perspective_center_params_from_equi_point(label_x, label_y, equi_width, 
 
 
 class Panorama:
-    def __init__(self, pano_id):
+    def __init__(self, pano_id, cached_image_path=None):
         self.pano_id = pano_id
         self.panorama_image = None
         self.zoom = None
-        self._fetch_panorama()
+
+        start = time.perf_counter()
+        source = None
+
+        # Attempt to download a cached image. If none exists, download directly.
+        if cached_image_path is not None and os.path.exists(cached_image_path):
+            cached = cv2.imread(cached_image_path)
+            if cached is not None:
+                self.panorama_image = cv2.resize(cached, (8192, 4096), interpolation=cv2.INTER_LINEAR)
+                source = f"cache ({cached_image_path})"
+            else:
+                print(f"[Panorama] {pano_id} cache file unreadable at {cached_image_path}; falling back to Google")
+
+        if self.panorama_image is None:
+            self._fetch_panorama()
+            if cached_image_path is not None and source is None:
+                source = f"Google (cache miss: {cached_image_path})"
+            else:
+                source = "Google (no cache configured)"
+
+        elapsed = time.perf_counter() - start
+        status = "ok" if self.panorama_image is not None else "FAILED"
+        print(f"[Panorama] {pano_id} loaded from {source} in {elapsed:.3f}s [{status}]")
 
     def _is_black_tile(self, tile):
         if tile is None:
@@ -95,7 +119,7 @@ class Panorama:
     def _fetch_tile(self, x, y, zoom=4):
         if self.zoom != None:
             zoom = self.zoom
-        
+
         url = (
             f"https://streetviewpixels-pa.googleapis.com/v1/tile"
             f"?cb_client=maps_sv.tactile&panoid={self.pano_id}"
@@ -201,12 +225,12 @@ class Panorama:
         max_x, max_y, initial_tiles = dimension_result
         full_tiles = self._fetch_remaining_tiles(max_x, max_y, initial_tiles)
         result = cv2.cvtColor(np.array(self._assemble_panorama(full_tiles, max_x, max_y)), cv2.COLOR_RGB2BGR)
-        self.panorama_image = cv2.resize(self._crop(result), (8192, 4096), 
+        self.panorama_image = cv2.resize(self._crop(result), (8192, 4096),
                interpolation = cv2.INTER_LINEAR)
 
     def get_equi(self):
         return self.panorama_image
-    
+
     def to_perspective_image(self, fov, theta, phi, height, width):
         """
         Converts the equirectangular panorama image to a perspective image.
@@ -224,7 +248,7 @@ class Panorama:
         if self.panorama_image is None:
             return None
         return equirectangular_to_perspective(self.panorama_image, fov, theta, phi, height, width)
-    
+
     def get_perspective_center_params(self, label_x, label_y):
         """
         Calculates the yaw (theta) and pitch (phi) angles to center a specific equirectangular point
