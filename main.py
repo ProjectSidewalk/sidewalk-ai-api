@@ -54,6 +54,8 @@ def process():
         cached_image_path = os.path.join(SCRAPES_DIR, f"scrapes_dump_{city}", panorama_id[:2], f"{panorama_id}.jpg")
 
     panorama = Panorama(panorama_id, cached_image_path=cached_image_path)
+    if panorama.panorama_image is None:
+        return jsonify({"error": f"Failed to fetch panorama"}), 502
     height, width = panorama.panorama_image.shape[:2]
     theta, phi = panorama.get_perspective_center_params(label_x * width, label_y * height)
     perspective_image = panorama.to_perspective_image(90, theta, phi, width // 4, width // 4)
@@ -81,7 +83,7 @@ def process():
     perspective_image = cv2.cvtColor(perspective_image, cv2.COLOR_BGR2RGB)
     perspective_image = Image.fromarray(perspective_image)
 
-    response = {"label_type": label_type}
+    response = {"label_type": label_type, "image_source": panorama.image_source}
 
     # Perform tagging inference only if label_type is in TAGGER_LABEL_TYPES
     if label_type in TAGGER_LABEL_TYPES:

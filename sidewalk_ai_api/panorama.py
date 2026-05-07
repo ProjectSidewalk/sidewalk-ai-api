@@ -85,6 +85,7 @@ class Panorama:
     def __init__(self, pano_id, cached_image_path=None):
         self.pano_id = pano_id
         self.panorama_image = None
+        self.image_source = None
         self.zoom = None
 
         start = time.perf_counter()
@@ -95,12 +96,15 @@ class Panorama:
             cached = cv2.imread(cached_image_path)
             if cached is not None:
                 self.panorama_image = cv2.resize(cached, (8192, 4096), interpolation=cv2.INTER_LINEAR)
+                self.image_source = "cache"
                 source = f"cache ({cached_image_path})"
             else:
                 print(f"[Panorama] {pano_id} cache file unreadable at {cached_image_path}; falling back to Google")
 
         if self.panorama_image is None:
             self._fetch_panorama()
+            if self.panorama_image is not None:
+                self.image_source = "download"
             if cached_image_path is not None and source is None:
                 source = f"Google (cache miss: {cached_image_path})"
             else:
