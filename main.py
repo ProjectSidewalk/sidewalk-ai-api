@@ -51,7 +51,7 @@ def process():
 
     cached_image_path = None
     if SCRAPES_DIR and city and len(panorama_id) >= 2:
-        cached_image_path = os.path.join(SCRAPES_DIR, f"scrapes_dump_{city}", panorama_id[:2], f"{panorama_id}.jpg")
+        cached_image_path = os.path.join(SCRAPES_DIR, city, panorama_id[:2], f"{panorama_id}.jpg")
 
     panorama = Panorama(panorama_id, cached_image_path=cached_image_path)
     if panorama.panorama_image is None:
