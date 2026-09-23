@@ -45,11 +45,12 @@ docker  build  -t  sidewalk-ai-api  .
 
 ## Run
 
-Every request must carry a shared secret as a bearer token, so pick one and hand the same value to the server (below) and to the Sidewalk webpage (its `SIDEWALK_AI_API_KEY` env var). With no key set, the server rejects every request.
+Every request must carry a shared secret as a bearer token, so pick one and hand the same value to the server (below) and to the Sidewalk webpage (its `SIDEWALK_AI_API_KEY` env var). With no key set, the server rejects every request. Export the key rather than typing it into the `docker run` line, so it stays out of your shell history.
 
 ```bash
 
-docker  run  --gpus  all  --runtime  nvidia  -d  -p  5000:5000  -e  SIDEWALK_AI_API_KEY=<your-key>  sidewalk-ai-api
+export  SIDEWALK_AI_API_KEY=<your-key>
+docker  run  --gpus  all  --runtime  nvidia  -d  -p  5000:5000  -e  SIDEWALK_AI_API_KEY  sidewalk-ai-api
 
 ```
 
