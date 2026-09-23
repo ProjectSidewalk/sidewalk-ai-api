@@ -19,7 +19,7 @@ This endpoint analyzes a single label at a specified coordinate within a given p
 
 #### Authentication
 
-Every request must include the shared API key as a bearer token: `Authorization: Bearer <api key>`. The server reads its copy from the `SIDEWALK_AI_API_KEY` environment variable; a request with a missing or wrong key gets a `401` with `{"error": "Missing or invalid API key"}`. The key is shared with Project Sidewalk staff only.
+Every request must include the API key as `Authorization: Bearer <api key>`. A missing or wrong key gets a `401`. The key is available to Project Sidewalk staff only.
 
 #### Parameters
 

@@ -45,7 +45,7 @@ docker  build  -t  sidewalk-ai-api  .
 
 ## Run
 
-Every request must carry a shared secret as a bearer token, so pick one and hand the same value to the server (below) and to the Sidewalk webpage (its `SIDEWALK_AI_API_KEY` env var). With no key set, the server rejects every request. Export the key rather than typing it into the `docker run` line, so it stays out of your shell history.
+Every request needs a password, set as `SIDEWALK_AI_API_KEY` on both this server and the Sidewalk website. Export it rather than typing it into the `docker run` line so it stays out of your shell history.
 
 ```bash
 
