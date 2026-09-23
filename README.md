@@ -44,9 +44,12 @@ docker  build  -t  sidewalk-ai-api  .
 ```
 
 ## Run
+
+Every request must carry a shared secret as a bearer token, so pick one and hand the same value to the server (below) and to the Sidewalk webpage (its `SIDEWALK_AI_API_KEY` env var). With no key set, the server rejects every request.
+
 ```bash
 
-docker  run  --gpus  all  --runtime  nvidia  -d  -p  5000:5000  sidewalk-ai-api
+docker  run  --gpus  all  --runtime  nvidia  -d  -p  5000:5000  -e  SIDEWALK_AI_API_KEY=<your-key>  sidewalk-ai-api
 
 ```
 
@@ -56,7 +59,7 @@ docker  run  --gpus  all  --runtime  nvidia  -d  -p  5000:5000  sidewalk-ai-api
 
 ```bash
 
-curl -X POST -F "label_type=curbramp" -F "panorama_id=3-WpZU8MDYwe_9edeLw30w" -F "x=0.18981933593" -F "y=0.63134765625" http://127.0.0.1:5000/process
+curl -X POST -H "Authorization: Bearer $SIDEWALK_AI_API_KEY" -F "label_type=curbramp" -F "panorama_id=3-WpZU8MDYwe_9edeLw30w" -F "x=0.18981933593" -F "y=0.63134765625" http://127.0.0.1:5000/process
 
 ```
 Please note that x and y are normalized coordinates (between 0 and 1) on the equirectangular image.

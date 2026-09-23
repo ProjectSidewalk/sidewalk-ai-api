@@ -6,12 +6,30 @@ from sidewalk_ai_api.panorama import Panorama
 from sidewalk_ai_api.depthanything import DepthAnythingPredictor
 from sidewalk_ai_api.model_map import MODEL_MAP
 import cv2
+import hmac
 import json
+import logging
 import os
 
 SCRAPES_DIR = os.environ.get("SIDEWALK_SCRAPES_DIR")
 
+# The shared secret that callers (the Sidewalk webpage) must send as a bearer token. Left unset, every request is
+# rejected rather than letting an unconfigured server run open.
+API_KEY = os.environ.get("SIDEWALK_AI_API_KEY", "")
+if not API_KEY:
+    logging.getLogger(__name__).warning("SIDEWALK_AI_API_KEY is not set; every request will be rejected with 401.")
+
 app = Flask(__name__)
+
+
+@app.before_request
+def require_api_key():
+    """Rejects any request whose Authorization header isn't the configured bearer key, before the body is parsed."""
+    provided = request.headers.get("Authorization", "")
+    expected = f"Bearer {API_KEY}" if API_KEY else ""
+    if not API_KEY or not hmac.compare_digest(provided.encode(), expected.encode()):
+        return jsonify({"error": "Missing or invalid API key"}), 401
+
 
 depthanything = DepthAnythingPredictor()
 
