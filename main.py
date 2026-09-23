@@ -13,8 +13,7 @@ import os
 
 SCRAPES_DIR = os.environ.get("SIDEWALK_SCRAPES_DIR")
 
-# The shared secret that callers (the Sidewalk webpage) must send as a bearer token. Left unset, every request is
-# rejected rather than letting an unconfigured server run open.
+# The password every request must include. If it's not set, every request is rejected rather than letting anyone in.
 API_KEY = os.environ.get("SIDEWALK_AI_API_KEY", "").strip()
 EXPECTED_AUTH_HEADER = f"Bearer {API_KEY}"
 logger = logging.getLogger(__name__)
@@ -26,7 +25,7 @@ app = Flask(__name__)
 
 @app.before_request
 def require_api_key():
-    """Rejects any request whose Authorization header isn't the configured bearer key, before the body is parsed."""
+    """Rejects any request without the right password, before doing any real work."""
     provided = request.headers.get("Authorization", "")
     if not API_KEY or not hmac.compare_digest(provided.encode(), EXPECTED_AUTH_HEADER.encode()):
         logger.warning(f"Rejected request from {request.remote_addr}: missing or invalid API key")
