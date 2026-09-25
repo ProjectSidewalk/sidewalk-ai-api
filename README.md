@@ -45,7 +45,17 @@ docker  build  -t  sidewalk-ai-api  .
 
 ## Run
 
-Every request needs a password, set as `SIDEWALK_AI_API_KEY` on both this server and the Sidewalk website. Export it rather than typing it into the `docker run` line so it stays out of your shell history.
+Every request needs a password, set as `SIDEWALK_AI_API_KEY` on both this server and the Sidewalk website. Keep it in a file only you can read, which `docker_start.sh` loads on its own:
+
+```bash
+
+echo  'export SIDEWALK_AI_API_KEY=<your-key>'  >  ~/.sidewalk-ai-api.env
+chmod  600  ~/.sidewalk-ai-api.env
+./docker_start.sh
+
+```
+
+Or, to run the container by hand, export it first (rather than typing it into the `docker run` line, so it stays out of your shell history):
 
 ```bash
 
