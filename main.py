@@ -6,12 +6,31 @@ from sidewalk_ai_api.panorama import Panorama
 from sidewalk_ai_api.depthanything import DepthAnythingPredictor
 from sidewalk_ai_api.model_map import MODEL_MAP
 import cv2
+import hmac
 import json
+import logging
 import os
 
 SCRAPES_DIR = os.environ.get("SIDEWALK_SCRAPES_DIR")
 
+# The password every request must include. If it's not set, every request is rejected rather than letting anyone in.
+API_KEY = os.environ.get("SIDEWALK_AI_API_KEY", "").strip()
+EXPECTED_AUTH_HEADER = f"Bearer {API_KEY}"
+logger = logging.getLogger(__name__)
+if not API_KEY:
+    logger.warning("SIDEWALK_AI_API_KEY is not set; every request will be rejected with 401.")
+
 app = Flask(__name__)
+
+
+@app.before_request
+def require_api_key():
+    """Rejects any request without the right password, before doing any real work."""
+    provided = request.headers.get("Authorization", "")
+    if not API_KEY or not hmac.compare_digest(provided.encode(), EXPECTED_AUTH_HEADER.encode()):
+        logger.warning(f"Rejected request from {request.remote_addr}: missing or invalid API key")
+        return jsonify({"error": "Missing or invalid API key"}), 401, {"WWW-Authenticate": "Bearer"}
+
 
 depthanything = DepthAnythingPredictor()
 

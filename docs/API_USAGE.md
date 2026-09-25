@@ -15,6 +15,11 @@ This endpoint analyzes a single label at a specified coordinate within a given p
 | **URL**      | `https://sidewalk-ai-api.cs.washington.edu/process` |
 | **Method**   | `POST`                                              |
 | **Content-Type** | `multipart/form-data`                               |
+| **Authorization** | `Bearer <api key>`                               |
+
+#### Authentication
+
+Every request must include the API key as `Authorization: Bearer <api key>`. A missing or wrong key gets a `401`. The key is available to Project Sidewalk staff only.
 
 #### Parameters
 

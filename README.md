@@ -44,9 +44,23 @@ docker  build  -t  sidewalk-ai-api  .
 ```
 
 ## Run
+
+Every request needs a password, set as `SIDEWALK_AI_API_KEY` on both this server and the Sidewalk website. Keep it in a file only you can read, which `docker_start.sh` loads on its own:
+
 ```bash
 
-docker  run  --gpus  all  --runtime  nvidia  -d  -p  5000:5000  sidewalk-ai-api
+echo  'export SIDEWALK_AI_API_KEY=<your-key>'  >  ~/.sidewalk-ai-api.env
+chmod  600  ~/.sidewalk-ai-api.env
+./docker_start.sh
+
+```
+
+Or, to run the container by hand, export it first (rather than typing it into the `docker run` line, so it stays out of your shell history):
+
+```bash
+
+export  SIDEWALK_AI_API_KEY=<your-key>
+docker  run  --gpus  all  --runtime  nvidia  -d  -p  5000:5000  -e  SIDEWALK_AI_API_KEY  sidewalk-ai-api
 
 ```
 
@@ -56,7 +70,7 @@ docker  run  --gpus  all  --runtime  nvidia  -d  -p  5000:5000  sidewalk-ai-api
 
 ```bash
 
-curl -X POST -F "label_type=curbramp" -F "panorama_id=3-WpZU8MDYwe_9edeLw30w" -F "x=0.18981933593" -F "y=0.63134765625" http://127.0.0.1:5000/process
+curl -X POST -H "Authorization: Bearer $SIDEWALK_AI_API_KEY" -F "label_type=curbramp" -F "panorama_id=3-WpZU8MDYwe_9edeLw30w" -F "x=0.18981933593" -F "y=0.63134765625" http://127.0.0.1:5000/process
 
 ```
 Please note that x and y are normalized coordinates (between 0 and 1) on the equirectangular image.
