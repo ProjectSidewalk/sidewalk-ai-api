@@ -1,0 +1,67 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Overview
+
+Flask API that serves Project Sidewalk's AI models for tagging and validating accessibility labels (curb ramps, crosswalks, obstacles, surface problems, missing curb ramps) on Google Street View panoramas. Single endpoint `POST /process` in `main.py`. Request/response details for API consumers are in `docs/API_USAGE.md`.
+
+## Common commands
+
+After cloning, fetch the Depth-Anything-V2 submodule and download model checkpoints:
+
+```bash
+git submodule init && git submodule update
+./download_models.sh   # populates checkpoints/ (the Docker build also runs this)
+```
+
+Build and run via Docker (GPU required — needs CUDA + nvidia-container-toolkit, ~9–10 GB VRAM per instance):
+
+```bash
+./docker_build.sh       # builds the sidewalk-ai-api image
+./docker_start.sh       # runs it on 127.0.0.1:60654 → container 5000, restart unless-stopped
+./docker_build.sh dev && ./docker_start.sh dev   # test instance alongside prod: sidewalk-ai-api-dev on 127.0.0.1:60655
+```
+
+`docker_start.sh` sources `SIDEWALK_AI_API_KEY` from `~/.sidewalk-ai-api.env` (refuses to start without it), and mounts the lab's panorama cache read-only, setting `SIDEWALK_SCRAPES_DIR` to the same path. Ports are bound to loopback only; on the server, an https reverse proxy fronts prod. To reach the dev instance from another machine, use an SSH tunnel (`ssh -L 60655:127.0.0.1:60655 <server>`). The container runs `ignition.sh` (gunicorn, 1 worker, 120 s timeout).
+
+Run locally without Docker (requires CUDA, the submodule, and downloaded checkpoints):
+
+```bash
+export SIDEWALK_AI_API_KEY=<key>          # required; without it every request is a 401
+gunicorn -w 1 -b 0.0.0.0:5000 main:app   # production form (see ignition.sh)
+python main.py                            # dev form, Flask's built-in server
+```
+
+Smoke test (use port 60654/60655 for the Docker instances):
+
+```bash
+curl -X POST -H "Authorization: Bearer $SIDEWALK_AI_API_KEY" -F "label_type=curbramp" -F "panorama_id=3-WpZU8MDYwe_9edeLw30w" \
+     -F "x=0.18981933593" -F "y=0.63134765625" http://127.0.0.1:5000/process
+```
+
+There is no unit test suite, linter, or formatter configured. For changes that could affect model outputs (dependency bumps, preprocessing, refactors), run the regression check on the server with prod and a dev instance both up: `python3 regression/compare.py` sends the 50 labels in `regression/labels.csv` to both (all served from the panorama cache, so both see identical pixels) and reports changed outcomes (FAIL) or score movement beyond `--tolerance` (DRIFT), then forces one Google download per label type to check the download path still works on dev. It passes (exit 0) only with no FAIL, no SKIP (both errored), and a clean download check. It only uses the standard library. Note that validator weights come from HuggingFace at container start without a pinned revision, so prod and dev can differ in weights if a validator repo was updated in between.
+
+## Request flow (`/process`)
+
+Form fields: `label_type`, `panorama_id`, `x`, `y` (required), and `city` (optional, used only for the cache lookup). The endpoint stitches together panorama loading, geometry, depth estimation, and two ML inferences:
+
+1. **Panorama load** (`sidewalk_ai_api/panorama.py`) — `Panorama(pano_id, cached_image_path)` first tries the local cache at `$SIDEWALK_SCRAPES_DIR/{city}/{pano_id[:2]}/{pano_id}.jpg` (read with OpenCV). On a miss, it downloads tiles from Google Street View's `streetviewpixels-pa.googleapis.com` endpoint: auto-discovers dimensions by scanning until it hits black tiles, falls back from zoom 4 → zoom 3 if needed, fetches tiles in parallel (100 threads), assembles them, and crops zero-borders. Either way the result is resized to a fixed 8192×4096. The response's `image_source` is `"cache"` or `"download"`; if both fail the endpoint returns 502.
+2. **Equirectangular → perspective projection** — the normalized `(x, y)` is converted to yaw/pitch (`Panorama.get_perspective_center_params`), then `to_perspective_image` renders a 90° FOV, 2048×2048 view centered on the label using PyTorch `grid_sample` on the GPU.
+3. **Depth-aware crop sizing** (`sidewalk_ai_api/depthanything.py`) — `DepthAnythingPredictor` runs the Depth-Anything-V2 metric model (`vitb` / `vkitti`, max_depth=80) on the perspective image; the crop half-size around the label center is `int((1 / depth_at_center) * 6100)`, so closer features get larger crops. The crop is resized to a 640px longest side and converted to an RGB PIL image.
+4. **Tagger inference** (`sidewalk_ai_api/tagger.py`) — only for `crosswalk`, `curbramp`, `obstacle`, `surfaceproblem`. A DINOv2 ViT-base classifier (custom head: 768→256→nc) loads from `checkpoints/validated-dino-cls-b-{label_type}-tags-best.pth`. Tag names (by class index) come from `mappings.json`; `NULL` entries are intentional placeholders that preserve the class indices learned during training — do not remove them. Sigmoid scores are compared against per-tag thresholds in `tag_thresholds.json`: score ≥ `present` → `tags`, score ≤ `absent` → `tags_not_present`, either may be `null` to disable that side. `tag_scores` reports every tag listed in `tag_thresholds.json`, including ones with both thresholds null.
+5. **Validator inference** (`sidewalk_ai_api/validator.py`) — for all five label types including `nocurbramp`. Loads `projectsidewalk/sidewalk-validator-ai-{label_type}` from HuggingFace at startup via `transformers.AutoModelForImageClassification` (downloaded at container start, not baked into the image). Returns `(label_name, confidence)`.
+6. **Calibrated accuracy lookup** — `accuracy_mappings/{label_type}.json` maps confidence thresholds to empirical accuracies (model confidence ≠ probability of correctness). The code walks ascending thresholds and keeps the highest one ≤ confidence, returned as `validation_estimated_accuracy`.
+
+All taggers, validators, and the depth model are instantiated **once at module import** in `main.py` and live on the GPU for the lifetime of the process. Cold start takes a minute or two; gunicorn is intentionally run with a single worker.
+
+## Conventions and gotchas
+
+- **Auth:** a `before_request` hook in `main.py` requires `Authorization: Bearer <SIDEWALK_AI_API_KEY>` on every request (constant-time compare, 401 otherwise, fails closed when the env var is unset). The Sidewalk website sends the same key from its own `SIDEWALK_AI_API_KEY` env var, so rotate both together. Never commit the key or put it on a `docker run` command line.
+- `x` and `y` in API requests are **normalized** equirectangular coordinates in `[0, 1]`, not pixels. They get multiplied by the fixed 8192×4096 panorama size.
+- The set of supported label types is hardcoded in two lists in `main.py`: `TAGGER_LABEL_TYPES` (4 types) and `VALIDATOR_LABEL_TYPES` (5 types, includes `nocurbramp`). Adding a new label type requires updating both lists, `mappings.json` and `tag_thresholds.json` (for taggers), `accuracy_mappings/`, `MODEL_MAP` in `sidewalk_ai_api/model_map.py`, and `download_models.sh`.
+- `MODEL_MAP` carries `model_id` and `training_date` strings (MM-DD-YYYY) returned in the API response — keep these in sync when updating checkpoints.
+- `API_VERSION` is read from the file of the same name at startup and echoed in every response. Bump it when behavior changes.
+- **Dependencies:** `requirements.txt` is a full pinned freeze, installed with `pip install --no-deps` on top of the `pytorch/pytorch:2.5.1-cuda11.8` base image. Because of `--no-deps`, bumping a package means checking its own requirements by hand. torch/torchvision/torchaudio/triton must move together and match the base image's CUDA version. Major bumps of torch or transformers can change model outputs (and `torch` ≥ 2.6 changes `torch.load`'s `weights_only` default), so compare outputs before and after.
+- The `Depth-Anything-V2` directory is a git submodule and is added to `sys.path` at runtime in `depthanything.py` (`Depth-Anything-V2/metric_depth`). The `dinov2/` directory is a vendored copy of Meta's DINOv2 (used directly by `tagger.py` via `from dinov2.models.vision_transformer import vit_base`); do not treat it like normal first-party code.
+- Tile fetches go to Google's undocumented Street View tile API, which requires browser-like headers (`HEADERS` in `panorama.py`). There is no auth, retry, or rate-limit handling beyond a single zoom-3 fallback — be conservative if you change `_fetch_panorama` / `_fetch_tile`.
