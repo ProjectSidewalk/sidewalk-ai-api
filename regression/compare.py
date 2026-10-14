@@ -20,7 +20,11 @@ Each label is classified as:
     DRIFT  outcomes match, but the validator score or a tag score moved more than --tolerance.
     same   everything within tolerance.
     SKIP   both instances errored on the label, so there's nothing to compare.
-Exits 1 if any label FAILs, 0 otherwise.
+Then a download check sends one label per type to both instances with no city, forcing a download from Google, and
+checks that B succeeds wherever A does (scores aren't compared, since separate downloads can differ).
+
+Exits 0 only if every label is "same" or DRIFT and the download check passes. A SKIP also fails the run, so a broken
+setup (cache mount, instance down) can't pass by comparing nothing.
 """
 
 import argparse
@@ -39,9 +43,10 @@ DEFAULT_LABELS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "label
 
 
 def load_api_key():
-    key = os.environ.get("SIDEWALK_AI_API_KEY", "").strip()
+    """Same precedence as docker_start.sh: the key file wins over an exported variable, which may be stale."""
+    key = ""
     env_path = os.path.expanduser("~/.sidewalk-ai-api.env")
-    if not key and os.path.exists(env_path):
+    if os.path.exists(env_path):
         with open(env_path) as f:
             for line in f:
                 line = line.strip()
@@ -49,17 +54,19 @@ def load_api_key():
                     line = line[len("export "):].strip()
                 if line.startswith("SIDEWALK_AI_API_KEY="):
                     key = line.split("=", 1)[1].strip().strip("'\"")
+    key = key or os.environ.get("SIDEWALK_AI_API_KEY", "").strip()
     if not key:
         raise SystemExit("SIDEWALK_AI_API_KEY is not set and wasn't found in ~/.sidewalk-ai-api.env")
     return key
 
 
-def call(url, key, label, timeout):
-    """Returns (status, parsed JSON or None, seconds)."""
+def call(url, key, label, timeout, use_cache=True):
+    """Returns (status, parsed JSON or None, seconds). With use_cache=False, the city is left out so the API has to
+    download the panorama from Google."""
     data = urllib.parse.urlencode({
         "label_type": label["label_type"],
         "panorama_id": label["pano_id"],
-        "city": label["city_id"],
+        "city": label["city_id"] if use_cache else "",
         "x": label["x"],
         "y": label["y"],
     }).encode()
@@ -92,10 +99,12 @@ def compare(a, b, tolerance):
     """Returns (verdict, list of difference descriptions, dict of score deltas)."""
     status_a, ra, _ = a
     status_b, rb, _ = b
-    if status_a != 200 or status_b != 200 or ra is None or rb is None:
-        if status_a == status_b:
-            return "SKIP", [f"both returned {status_a}"], {}
+    if status_a != status_b:
         return "FAIL", [f"status {status_a} -> {status_b}"], {}
+    if status_a != 200:
+        return "SKIP", [f"both returned {status_a}"], {}
+    if not isinstance(ra, dict) or not isinstance(rb, dict):
+        return "FAIL", [f"unparseable 200 response from {'A' if not isinstance(ra, dict) else 'B'}"], {}
 
     fails, drifts, deltas = [], [], {}
     if ra.get("validation_result") != rb.get("validation_result"):
@@ -107,15 +116,16 @@ def compare(a, b, tolerance):
         if sa != sb:
             fails.append(f"{field}: -{sorted(sa - sb)} +{sorted(sb - sa)}")
 
-    if "validation_score" in ra and "validation_score" in rb:
-        deltas["validation_score"] = abs(ra["validation_score"] - rb["validation_score"])
+    for field in ("validation_score", "validation_estimated_accuracy"):
+        if field in ra and field in rb:
+            deltas[field] = abs(ra[field] - rb[field])
     scores_a, scores_b = ra.get("tag_scores", {}), rb.get("tag_scores", {})
     if set(scores_a) != set(scores_b):
         fails.append(f"tag_scores keys: -{sorted(set(scores_a) - set(scores_b))} +{sorted(set(scores_b) - set(scores_a))}")
     for tag in set(scores_a) & set(scores_b):
         deltas[f"tag:{tag}"] = abs(scores_a[tag] - scores_b[tag])
     for name, d in sorted(deltas.items()):
-        if d > tolerance:
+        if not d <= tolerance:  # Written this way so a NaN counts as drift.
             drifts.append(f"{name} moved {d:.2e}")
 
     if fails:
@@ -123,6 +133,30 @@ def compare(a, b, tolerance):
     if drifts:
         return "DRIFT", drifts, deltas
     return "same", [], deltas
+
+
+def download_check(args, key, labels):
+    """The comparison above reads every panorama from the cache, which skips the Google download path (requests,
+    urllib3, Brotli, idna, Pillow's tile decoding). This sends one label per type with no city, so both instances
+    have to download, and checks that B manages whenever A does. Scores aren't compared: each instance downloads its
+    own copy, and those can differ. Returns the number of failures."""
+    picks = list({label["label_type"]: label for label in reversed(labels)}.values())
+    print(f"\n=== download check: {len(picks)} labels fetched from Google ===")
+    failures = 0
+    for label in picks:
+        a = call(args.a, key, label, args.timeout, use_cache=False)
+        b = call(args.b, key, label, args.timeout, use_cache=False)
+        b_ok = b[0] == 200 and isinstance(b[1], dict) and b[1].get("image_source") == "download"
+        if b_ok:
+            result = "ok"
+        elif a[0] != 200:
+            result = f"SKIP (A also failed with {a[0]}; panorama may be gone from Google)"
+        else:
+            source = f", image_source={b[1].get('image_source')}" if b[0] == 200 and isinstance(b[1], dict) else ""
+            result = f"FAIL (A {a[0]}, B {b[0]}{source})"
+            failures += 1
+        print(f"  {label['label_type']:14} label {label['label_id']}: {result} (A {a[2]:.1f}s, B {b[2]:.1f}s)")
+    return failures
 
 
 def main():
@@ -139,13 +173,20 @@ def main():
     key = load_api_key()
     with open(args.labels) as f:
         labels = list(csv.DictReader(f))
+    if not labels:
+        raise SystemExit(f"No labels in {args.labels}")
     print(f"Comparing A={args.a} vs B={args.b} on {len(labels)} labels (tolerance {args.tolerance:g})\n")
 
     verdicts = Counter()
     max_deltas = defaultdict(float)  # label_type -> largest score change seen
     sources = Counter()
     version_diffs = set()  # (field, A value, B value) for api_version / model ids that differ
-    rows = []
+    out_file = open(args.out, "w", newline="") if args.out else None
+    writer = None
+    if out_file:
+        writer = csv.DictWriter(out_file, fieldnames=list(labels[0].keys()) + [
+            "verdict", "notes", "status_a", "response_a", "status_b", "response_b"])
+        writer.writeheader()
     with ThreadPoolExecutor(max_workers=2) as pool:
         for i, label in enumerate(labels, 1):
             fut_a = pool.submit(call, args.a, key, label, args.timeout)
@@ -158,31 +199,33 @@ def main():
             if deltas:
                 max_deltas[label["label_type"]] = max(max_deltas[label["label_type"]], max(deltas.values()))
             for side, (status, resp, _) in (("A", a), ("B", b)):
-                if status == 200 and resp:
+                if status == 200 and isinstance(resp, dict):
                     sources[f"{side}:{resp.get('image_source')}"] += 1
-            if a[0] == b[0] == 200 and a[1] and b[1]:
+            if a[0] == b[0] == 200 and isinstance(a[1], dict) and isinstance(b[1], dict):
                 for field in ("api_version", "validator_model_id", "validator_training_date",
                               "tagger_model_id", "tagger_training_date"):
                     if a[1].get(field) != b[1].get(field):
                         version_diffs.add((field, a[1].get(field), b[1].get(field)))
 
-            from_google = any(r and r.get("image_source") != "cache" for s, r, _ in (a, b) if s == 200)
+            from_google = any(isinstance(r, dict) and r.get("image_source") != "cache"
+                              for s, r, _ in (a, b) if s == 200)
             line = (f"[{i}/{len(labels)}] {verdict:5} {label['label_type']:14} label {label['label_id']} "
                     f"(A {a[2]:.1f}s, B {b[2]:.1f}s){'  [image from Google, not cache]' if from_google else ''}")
             print(line + ("".join(f"\n      {n}" for n in notes) if verdict != "same" else ""))
-            rows.append({**label, "verdict": verdict, "notes": "; ".join(notes),
-                         "status_a": a[0], "response_a": json.dumps(a[1]),
-                         "status_b": b[0], "response_b": json.dumps(b[1])})
-
-    if args.out:
-        with open(args.out, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-            writer.writeheader()
-            writer.writerows(rows)
+            if writer:
+                writer.writerow({**label, "verdict": verdict, "notes": "; ".join(notes),
+                                 "status_a": a[0], "response_a": json.dumps(a[1]),
+                                 "status_b": b[0], "response_b": json.dumps(b[1])})
+                out_file.flush()
+    if out_file:
+        out_file.close()
         print(f"\nWrote full responses to {args.out}")
 
+    download_failures = download_check(args, key, labels)
+
     print("\n=== summary ===")
-    print("  " + ", ".join(f"{v}: {verdicts[v]}" for v in ("same", "DRIFT", "FAIL", "SKIP")))
+    print("  " + ", ".join(f"{v}: {verdicts[v]}" for v in ("same", "DRIFT", "FAIL", "SKIP"))
+          + f"; download check failures: {download_failures}")
     print("  largest score change by label type: "
           + ", ".join(f"{t} {d:.2e}" for t, d in sorted(max_deltas.items())))
     print("  image sources: " + ", ".join(f"{s} x{n}" for s, n in sorted(sources.items())))
@@ -192,8 +235,13 @@ def main():
               "  Check that the labels' city_id matches the cache's folder names (e.g. chicago-il).")
     for field, va, vb in sorted(version_diffs, key=str):
         print(f"  note: {field} differs: A={va} B={vb}")
+    if verdicts["SKIP"]:
+        print(f"  {verdicts['SKIP']} label(s) errored on both instances and weren't compared. Every label is cached, so\n"
+              "  that points at the setup (cache mount, instance down) rather than the change being tested.")
 
-    raise SystemExit(1 if verdicts["FAIL"] else 0)
+    passed = not verdicts["FAIL"] and not verdicts["SKIP"] and not download_failures
+    print(f"\n{'PASS' if passed else 'NOT PASSED'}")
+    raise SystemExit(0 if passed else 1)
 
 
 if __name__ == "__main__":

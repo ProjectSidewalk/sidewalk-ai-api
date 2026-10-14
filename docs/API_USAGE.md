@@ -23,7 +23,7 @@ Every request must include the API key as `Authorization: Bearer <api key>`. A m
 
 #### Parameters
 
-The following parameters must be sent in the body of the request.
+The following parameters are sent in the body of the request.
 
 | Parameter     | Data Type | Required | Description                                                                                                                                                                                                                                       |
 | :------------ | :-------- | :------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -31,6 +31,7 @@ The following parameters must be sent in the body of the request.
 | `panorama_id` | String    | Yes      | The unique identifier for the panorama image where the label is located.                                                                                                                                                                          |
 | `x`           | Float     | Yes      | The horizontal coordinate of the label on the equirectangular panorama. This value **must be normalized** to be between 0 and 1, where `0.0` represents the far-left edge and `1.0` represents the far-right edge. To calculate, use: `pixel_x / image_width`. |
 | `y`           | Float     | Yes      | The vertical coordinate of the label on the equirectangular panorama. This value **must be normalized** to be between 0 and 1, where `0.0` represents the top edge and `1.0` represents the bottom edge. To calculate, use: `pixel_y / image_height`. |
+| `city`        | String    | No       | The Project Sidewalk city id (e.g. `chicago-il`). When given, the API first looks for the panorama in the lab's local panorama cache for that city, and only downloads it from Google if it isn't there. |
 
 #### Response
 
@@ -41,8 +42,11 @@ The API returns a JSON object containing the results of the analysis.
 | Field                         | Data Type        | Description                                                                                                                                                                  |
 | :---------------------------- | :--------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `label_type`                  | String           | The `label_type` that was processed, echoing the value provided in the request.                                                                                              |
-| `tag_scores`                  | JSON Object      | An object where each key is a potential problem tag (e.g., `missing-tactile-warning`, `steep`) and its value is the model's confidence score for that tag being present.      |
-| `tags`                        | Array of Strings | A list of problem tags that the model has confidently identified for the given label, based on exceeding a confidence threshold (currently 0.3).                                                 |
+| `image_source`                | String           | Where the panorama came from: `"cache"` (the local panorama cache) or `"download"` (Google Street View).                                                                    |
+| `api_version`                 | String           | The version of this API that produced the response.                                                                                                                          |
+| `tag_scores`                  | JSON Object      | An object where each key is a potential problem tag (e.g., `missing tactile warning`, `steep`) and its value is the model's confidence score for that tag being present. Includes every tag for the label type, even ones the API never recommends. |
+| `tags`                        | Array of Strings | Tags the model is confident are present. Each tag has its own threshold (in `tag_thresholds.json`), and a tag is listed when its score is at or above it. Some tags are never recommended as present. |
+| `tags_not_present`            | Array of Strings | Tags the model is confident are absent: the tag's score is at or below its own "absent" threshold.                                                                           |
 | `tagger_model_id`                        | String | The HuggingFace model id for the tagger model used to make the prediction.                                                 |
 | `tagger_training_date`                        | String | A standard MM-DD-YYYY date indicating when the tagger model was trained.                                                 |
 | `validation_result`           | String           | The model's overall conclusion about the validity of the label. A value of `"correct"` indicates that the model agrees with the presence of the specified label type. Likewise, `"incorrect"` signifies the opposite. |
@@ -55,7 +59,18 @@ The API returns a JSON object containing the results of the analysis.
 
 The fields returned in the response are conditional on the `label_type` due to model availability.
 
--   **Tag-related fields** (`tag_scores`, `tags`, `tagger_model_id`, `tagger_training_date`) are returned for: `["crosswalk", "curbramp", "obstacle", "surfaceproblem"]`.
+-   **Tag-related fields** (`tag_scores`, `tags`, `tags_not_present`, `tagger_model_id`, `tagger_training_date`) are returned for: `["crosswalk", "curbramp", "obstacle", "surfaceproblem"]`.
 -   **Validation-related fields** (`validation_result`, `validation_score`, `validation_estimated_accuracy`, `validator_model_id`, `validator_training_date`) are returned for: `["crosswalk", "curbramp", "obstacle", "surfaceproblem", "nocurbramp"]`.
 
 If a `label_type` is submitted that does not support a particular analysis, the corresponding fields will be omitted from the JSON response.
+
+##### Error Responses
+
+Errors return a JSON object with an `error` message.
+
+| Code  | When                                                                                          |
+| :---- | :-------------------------------------------------------------------------------------------- |
+| `400` | A required parameter is missing, `x`/`y` is outside 0–1, or `label_type` isn't supported.     |
+| `401` | The API key is missing or wrong.                                                               |
+| `500` | Model inference failed.                                                                        |
+| `502` | The panorama couldn't be loaded from the cache or downloaded from Google (e.g. it no longer exists). |

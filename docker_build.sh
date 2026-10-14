@@ -1,3 +1,7 @@
 # Pass "dev" to build a separately tagged image for testing, so the prod image isn't overwritten.
-if [ "$1" = "dev" ]; then IMAGE=sidewalk-ai-api-dev; else IMAGE=sidewalk-ai-api; fi
+case "$1" in
+  "")  IMAGE=sidewalk-ai-api ;;
+  dev) IMAGE=sidewalk-ai-api-dev ;;
+  *)   echo "Usage: $0 [dev]" >&2; exit 1 ;;
+esac
 docker  build  -t  $IMAGE  .
