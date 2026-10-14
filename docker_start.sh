@@ -8,8 +8,17 @@
 # paths must match: the mount puts the folder in the container and SIDEWALK_SCRAPES_DIR tells the app where it is.
 PANOS_DIR=/m-makeabilitylab/makeabilitylab/sidewalk_panos/Panoramas
 
-docker run --gpus all --runtime nvidia -d -p 127.0.0.1:60654:5000 --restart unless-stopped \
+# Pass "dev" to run a test instance alongside prod: the dev image (from `./docker_build.sh dev`) on port 60655, named so
+# it's easy to remove (`docker rm -f sidewalk-ai-api-dev`), and not restarted on reboot. It needs ~9-10 GB of VRAM on
+# top of prod's. Reach it from another machine with `ssh -L 60655:127.0.0.1:60655 <server>`.
+if [ "$1" = "dev" ]; then
+  IMAGE=sidewalk-ai-api-dev; PORT=60655; RUN_OPTS="--name sidewalk-ai-api-dev"
+else
+  IMAGE=sidewalk-ai-api; PORT=60654; RUN_OPTS="--restart unless-stopped"
+fi
+
+docker run --gpus all --runtime nvidia -d -p 127.0.0.1:$PORT:5000 $RUN_OPTS \
       -e SIDEWALK_AI_API_KEY \
       -e SIDEWALK_SCRAPES_DIR=$PANOS_DIR \
       -v $PANOS_DIR:$PANOS_DIR:ro \
-      sidewalk-ai-api
+      $IMAGE

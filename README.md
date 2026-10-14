@@ -64,6 +64,15 @@ docker  run  --gpus  all  --runtime  nvidia  -d  -p  5000:5000  -e  SIDEWALK_AI_
 
 ```
 
+To test changes next to the production instance, build and start with `dev`. This runs a separate `sidewalk-ai-api-dev` container on `127.0.0.1:60655` (it needs its own ~9–10 GB of VRAM). To reach it from your own machine, tunnel in with `ssh -L 60655:127.0.0.1:60655 <server>` and send requests to `http://localhost:60655/process`. Remove it with `docker rm -f sidewalk-ai-api-dev` when you're done.
+
+```bash
+
+./docker_build.sh  dev
+./docker_start.sh  dev
+
+```
+
   
 
 ## Try an example
