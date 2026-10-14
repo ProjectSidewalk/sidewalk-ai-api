@@ -7,6 +7,10 @@ the server with prod and a dev instance (`./docker_build.sh dev && ./docker_star
     python3 regression/compare.py                     # prod on :60654 (A) vs dev on :60655 (B)
     python3 regression/compare.py --out results.csv   # also save every response
 
+Every label should be served from the panorama cache so both instances see identical pixels; labels downloaded from
+Google are marked, since Google's tiles can differ between downloads. The labels' city_id must match the cache's
+folder names (e.g. chicago-il), the same city id the Sidewalk website sends.
+
 Uses only the standard library, so the server's system python3 is enough. The API key comes from SIDEWALK_AI_API_KEY,
 or from ~/.sidewalk-ai-api.env like docker_start.sh.
 
@@ -162,8 +166,9 @@ def main():
                     if a[1].get(field) != b[1].get(field):
                         version_diffs.add((field, a[1].get(field), b[1].get(field)))
 
+            from_google = any(r and r.get("image_source") != "cache" for s, r, _ in (a, b) if s == 200)
             line = (f"[{i}/{len(labels)}] {verdict:5} {label['label_type']:14} label {label['label_id']} "
-                    f"(A {a[2]:.1f}s, B {b[2]:.1f}s)")
+                    f"(A {a[2]:.1f}s, B {b[2]:.1f}s){'  [image from Google, not cache]' if from_google else ''}")
             print(line + ("".join(f"\n      {n}" for n in notes) if verdict != "same" else ""))
             rows.append({**label, "verdict": verdict, "notes": "; ".join(notes),
                          "status_a": a[0], "response_a": json.dumps(a[1]),
@@ -182,7 +187,9 @@ def main():
           + ", ".join(f"{t} {d:.2e}" for t, d in sorted(max_deltas.items())))
     print("  image sources: " + ", ".join(f"{s} x{n}" for s, n in sorted(sources.items())))
     if sources.keys() - {"A:cache", "B:cache"}:
-        print("  note: some panoramas came from Google rather than the cache, so differences there may be the image.")
+        print("  WARNING: some panoramas came from Google rather than the cache. Each instance downloads its own copy, and\n"
+              "  Google's tiles can differ between downloads, so differences on those labels may be the image, not the code.\n"
+              "  Check that the labels' city_id matches the cache's folder names (e.g. chicago-il).")
     for field, va, vb in sorted(version_diffs, key=str):
         print(f"  note: {field} differs: A={va} B={vb}")
 
