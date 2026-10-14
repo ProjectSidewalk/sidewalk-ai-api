@@ -23,14 +23,19 @@ Each label is classified as:
 Then a download check sends one label per type to both instances with no city, forcing a download from Google, and
 checks that B succeeds wherever A does (scores aren't compared, since separate downloads can differ).
 
-Exits 0 only if every label is "same" or DRIFT and the download check passes. A SKIP also fails the run, so a broken
-setup (cache mount, instance down) can't pass by comparing nothing.
+It also compares speed: if B's median response time on the cached labels is more than --max-slowdown times A's, the
+run fails. That catches a model silently falling back to the CPU (every model picks CUDA only when torch can see the
+GPU) or a similar performance regression. The download check's times include Google and aren't compared.
+
+Exits 0 only if every label is "same" or DRIFT, B isn't too slow, and the download check passes. A SKIP also fails
+the run, so a broken setup (cache mount, instance down) can't pass by comparing nothing.
 """
 
 import argparse
 import csv
 import json
 import os
+import statistics
 import time
 import urllib.error
 import urllib.parse
@@ -167,6 +172,8 @@ def main():
     parser.add_argument("--tolerance", type=float, default=1e-3,
                         help="Largest score change (absolute) still counted as the same (default 1e-3)")
     parser.add_argument("--timeout", type=int, default=300, help="Per-request timeout in seconds (default 300)")
+    parser.add_argument("--max-slowdown", type=float, default=1.5,
+                        help="Fail if B's median time on cached labels is more than this many times A's (default 1.5)")
     parser.add_argument("--out", help="Optional CSV path to save both full responses for every label")
     args = parser.parse_args()
 
@@ -180,12 +187,13 @@ def main():
     verdicts = Counter()
     max_deltas = defaultdict(float)  # label_type -> largest score change seen
     sources = Counter()
+    times = {"A": [], "B": []}  # Response times on labels both served successfully from the cache.
     version_diffs = set()  # (field, A value, B value) for api_version / model ids that differ
     out_file = open(args.out, "w", newline="") if args.out else None
     writer = None
     if out_file:
         writer = csv.DictWriter(out_file, fieldnames=list(labels[0].keys()) + [
-            "verdict", "notes", "status_a", "response_a", "status_b", "response_b"])
+            "verdict", "notes", "seconds_a", "seconds_b", "status_a", "response_a", "status_b", "response_b"])
         writer.writeheader()
     with ThreadPoolExecutor(max_workers=2) as pool:
         for i, label in enumerate(labels, 1):
@@ -209,11 +217,15 @@ def main():
 
             from_google = any(isinstance(r, dict) and r.get("image_source") != "cache"
                               for s, r, _ in (a, b) if s == 200)
+            if a[0] == b[0] == 200 and not from_google:
+                times["A"].append(a[2])
+                times["B"].append(b[2])
             line = (f"[{i}/{len(labels)}] {verdict:5} {label['label_type']:14} label {label['label_id']} "
                     f"(A {a[2]:.1f}s, B {b[2]:.1f}s){'  [image from Google, not cache]' if from_google else ''}")
             print(line + ("".join(f"\n      {n}" for n in notes) if verdict != "same" else ""))
             if writer:
                 writer.writerow({**label, "verdict": verdict, "notes": "; ".join(notes),
+                                 "seconds_a": f"{a[2]:.2f}", "seconds_b": f"{b[2]:.2f}",
                                  "status_a": a[0], "response_a": json.dumps(a[1]),
                                  "status_b": b[0], "response_b": json.dumps(b[1])})
                 out_file.flush()
@@ -233,13 +245,23 @@ def main():
         print("  WARNING: some panoramas came from Google rather than the cache. Each instance downloads its own copy, and\n"
               "  Google's tiles can differ between downloads, so differences on those labels may be the image, not the code.\n"
               "  Check that the labels' city_id matches the cache's folder names (e.g. chicago-il).")
+    too_slow = False
+    if times["A"]:
+        med_a, med_b = statistics.median(times["A"]), statistics.median(times["B"])
+        ratio = med_b / med_a if med_a else float("inf")
+        too_slow = not ratio <= args.max_slowdown
+        print(f"  median time on {len(times['A'])} cached labels: A {med_a:.2f}s, B {med_b:.2f}s (B is {ratio:.2f}x A)")
+        if too_slow:
+            print(f"  SLOW: B is more than {args.max_slowdown:g}x slower than A. Check that B is using the GPU, e.g.\n"
+                  "  docker exec sidewalk-ai-api-dev python -c 'import torch; print(torch.cuda.is_available())'\n"
+                  "  and that nvidia-smi lists a process for each instance.")
     for field, va, vb in sorted(version_diffs, key=str):
         print(f"  note: {field} differs: A={va} B={vb}")
     if verdicts["SKIP"]:
         print(f"  {verdicts['SKIP']} label(s) errored on both instances and weren't compared. Every label is cached, so\n"
               "  that points at the setup (cache mount, instance down) rather than the change being tested.")
 
-    passed = not verdicts["FAIL"] and not verdicts["SKIP"] and not download_failures
+    passed = not verdicts["FAIL"] and not verdicts["SKIP"] and not download_failures and not too_slow
     print(f"\n{'PASS' if passed else 'NOT PASSED'}")
     raise SystemExit(0 if passed else 1)
 
