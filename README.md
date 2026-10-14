@@ -64,7 +64,7 @@ docker  run  --gpus  all  --runtime  nvidia  -d  -p  5000:5000  -e  SIDEWALK_AI_
 
 ```
 
-To test changes next to the production instance, build and start with `dev`. This runs a separate `sidewalk-ai-api-dev` container on `127.0.0.1:60655` (it needs its own ~9–10 GB of VRAM). To reach it from your own machine, tunnel in with `ssh -L 60655:127.0.0.1:60655 <server>` and send requests to `http://localhost:60655/process`. Remove it with `docker rm -f sidewalk-ai-api-dev` when you're done.
+To test changes next to the production instance, build and start with `dev`. This runs a separate `sidewalk-ai-api-dev` container on `127.0.0.1:60655` (it needs its own ~9–10 GB of VRAM). To reach it from your own machine, tunnel in with `ssh -L 60655:127.0.0.1:60655 <server>` and send requests to `http://localhost:60655/process`. Remove it with `docker rm -f sidewalk-ai-api-dev` when you're done. To check that your changes didn't change the models' outputs, run `python3 regression/compare.py` on the server while both are running; it compares prod and dev on a fixed set of labels.
 
 ```bash
 

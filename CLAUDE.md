@@ -40,7 +40,7 @@ curl -X POST -H "Authorization: Bearer $SIDEWALK_AI_API_KEY" -F "label_type=curb
      -F "x=0.18981933593" -F "y=0.63134765625" http://127.0.0.1:5000/process
 ```
 
-There is no test suite, linter, or formatter configured.
+There is no unit test suite, linter, or formatter configured. For changes that could affect model outputs (dependency bumps, preprocessing, refactors), run the regression check on the server with prod and a dev instance both up: `python3 regression/compare.py` sends the 50 labels in `regression/labels.csv` to both and reports any changed outcomes (FAIL, exit 1) or score movement beyond `--tolerance` (DRIFT). It only uses the standard library.
 
 ## Request flow (`/process`)
 
