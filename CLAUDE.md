@@ -53,6 +53,8 @@ Form fields: `label_type`, `panorama_id`, `x`, `y` (required), and `city` (optio
 5. **Validator inference** (`sidewalk_ai_api/validator.py`) — for all five label types including `nocurbramp`. Loads `projectsidewalk/sidewalk-validator-ai-{label_type}` from HuggingFace at startup via `transformers.AutoModelForImageClassification` (downloaded at container start, not baked into the image). Returns `(label_name, confidence)`.
 6. **Calibrated accuracy lookup** — `accuracy_mappings/{label_type}.json` maps confidence thresholds to empirical accuracies (model confidence ≠ probability of correctness). The code walks ascending thresholds and keeps the highest one ≤ confidence, returned as `validation_estimated_accuracy`.
 
+Each stage's duration (`pano`, `project`, `depth`, `tagger`, `validator`, plus `total`) is returned in a `Server-Timing` response header via the `timed()` context manager and an `after_request` hook in `main.py`; the regression check reports per-stage medians from it.
+
 All taggers, validators, and the depth model are instantiated **once at module import** in `main.py` and live on the GPU for the lifetime of the process. Cold start takes a minute or two; gunicorn is intentionally run with a single worker.
 
 ## Conventions and gotchas

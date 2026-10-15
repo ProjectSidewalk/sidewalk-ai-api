@@ -65,9 +65,28 @@ def load_api_key():
     return key
 
 
+def parse_server_timing(header):
+    """Turns the API's Server-Timing header ("pano;desc=cache;dur=310, depth;dur=95, ...") into {stage: seconds}.
+    Empty for an instance too old to send it."""
+    stages = {}
+    for entry in (header or "").split(","):
+        name, *params = [p.strip() for p in entry.split(";")]
+        for param in params:
+            if param.startswith("dur="):
+                try:
+                    stages[name] = float(param[4:]) / 1000
+                except ValueError:
+                    pass
+    return stages
+
+
+def format_stages(stages):
+    return ", ".join(f"{name} {secs:.2f}" for name, secs in stages.items() if name != "total")
+
+
 def call(url, key, label, timeout, use_cache=True):
-    """Returns (status, parsed JSON or None, seconds). With use_cache=False, the city is left out so the API has to
-    download the panorama from Google."""
+    """Returns (status, parsed JSON or None, seconds, {stage: seconds} from Server-Timing). With use_cache=False, the
+    city is left out so the API has to download the panorama from Google."""
     data = urllib.parse.urlencode({
         "label_type": label["label_type"],
         "panorama_id": label["pano_id"],
@@ -79,16 +98,16 @@ def call(url, key, label, timeout, use_cache=True):
     t0 = time.perf_counter()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            status, body = resp.status, resp.read()
+            status, body, timing = resp.status, resp.read(), resp.headers.get("Server-Timing")
     except urllib.error.HTTPError as e:
-        status, body = e.code, e.read()
+        status, body, timing = e.code, e.read(), e.headers.get("Server-Timing")
     except Exception as e:
-        return f"error: {e}", None, time.perf_counter() - t0
+        return f"error: {e}", None, time.perf_counter() - t0, {}
     try:
         parsed = json.loads(body)
     except ValueError:
         parsed = None
-    return status, parsed, time.perf_counter() - t0
+    return status, parsed, time.perf_counter() - t0, parse_server_timing(timing)
 
 
 def website_validation(resp):
@@ -102,8 +121,8 @@ def website_validation(resp):
 
 def compare(a, b, tolerance):
     """Returns (verdict, list of difference descriptions, dict of score deltas)."""
-    status_a, ra, _ = a
-    status_b, rb, _ = b
+    status_a, ra = a[:2]
+    status_b, rb = b[:2]
     if status_a != status_b:
         return "FAIL", [f"status {status_a} -> {status_b}"], {}
     if status_a != 200:
@@ -160,7 +179,8 @@ def download_check(args, key, labels):
             source = f", image_source={b[1].get('image_source')}" if b[0] == 200 and isinstance(b[1], dict) else ""
             result = f"FAIL (A {a[0]}, B {b[0]}{source})"
             failures += 1
-        print(f"  {label['label_type']:14} label {label['label_id']}: {result} (A {a[2]:.1f}s, B {b[2]:.1f}s)")
+        stages = "".join(f"\n      {side}: {format_stages(r[3])}" for side, r in (("A", a), ("B", b)) if r[3])
+        print(f"  {label['label_type']:14} label {label['label_id']}: {result} (A {a[2]:.1f}s, B {b[2]:.1f}s){stages}")
     return failures
 
 
@@ -188,12 +208,13 @@ def main():
     max_deltas = defaultdict(float)  # label_type -> largest score change seen
     sources = Counter()
     times = {"A": [], "B": []}  # Response times on labels both served successfully from the cache.
+    stage_times = {"A": defaultdict(list), "B": defaultdict(list)}  # Same labels, per stage, from Server-Timing.
     version_diffs = set()  # (field, A value, B value) for api_version / model ids that differ
     out_file = open(args.out, "w", newline="") if args.out else None
     writer = None
     if out_file:
         writer = csv.DictWriter(out_file, fieldnames=list(labels[0].keys()) + [
-            "verdict", "notes", "seconds_a", "seconds_b", "status_a", "response_a", "status_b", "response_b"])
+            "verdict", "notes", "seconds_a", "seconds_b", "stages_a", "stages_b", "status_a", "response_a", "status_b", "response_b"])
         writer.writeheader()
     with ThreadPoolExecutor(max_workers=2) as pool:
         for i, label in enumerate(labels, 1):
@@ -206,7 +227,7 @@ def main():
             verdicts[verdict] += 1
             if deltas:
                 max_deltas[label["label_type"]] = max(max_deltas[label["label_type"]], max(deltas.values()))
-            for side, (status, resp, _) in (("A", a), ("B", b)):
+            for side, (status, resp, *_) in (("A", a), ("B", b)):
                 if status == 200 and isinstance(resp, dict):
                     sources[f"{side}:{resp.get('image_source')}"] += 1
             if a[0] == b[0] == 200 and isinstance(a[1], dict) and isinstance(b[1], dict):
@@ -216,16 +237,20 @@ def main():
                         version_diffs.add((field, a[1].get(field), b[1].get(field)))
 
             from_google = any(isinstance(r, dict) and r.get("image_source") != "cache"
-                              for s, r, _ in (a, b) if s == 200)
+                              for s, r, *_ in (a, b) if s == 200)
             if a[0] == b[0] == 200 and not from_google:
                 times["A"].append(a[2])
                 times["B"].append(b[2])
+                for side, r in (("A", a), ("B", b)):
+                    for stage, secs in r[3].items():
+                        stage_times[side][stage].append(secs)
             line = (f"[{i}/{len(labels)}] {verdict:5} {label['label_type']:14} label {label['label_id']} "
                     f"(A {a[2]:.1f}s, B {b[2]:.1f}s){'  [image from Google, not cache]' if from_google else ''}")
             print(line + ("".join(f"\n      {n}" for n in notes) if verdict != "same" else ""))
             if writer:
                 writer.writerow({**label, "verdict": verdict, "notes": "; ".join(notes),
                                  "seconds_a": f"{a[2]:.2f}", "seconds_b": f"{b[2]:.2f}",
+                                 "stages_a": format_stages(a[3]), "stages_b": format_stages(b[3]),
                                  "status_a": a[0], "response_a": json.dumps(a[1]),
                                  "status_b": b[0], "response_b": json.dumps(b[1])})
                 out_file.flush()
@@ -251,6 +276,9 @@ def main():
         ratio = med_b / med_a if med_a else float("inf")
         too_slow = not ratio <= args.max_slowdown
         print(f"  median time on {len(times['A'])} cached labels: A {med_a:.2f}s, B {med_b:.2f}s (B is {ratio:.2f}x A)")
+        for side in ("A", "B"):
+            medians = {stage: statistics.median(v) for stage, v in stage_times[side].items()}
+            print(f"    {side} median by stage: {format_stages(medians) or 'not reported (no Server-Timing header)'}")
         if too_slow:
             print(f"  SLOW: B is more than {args.max_slowdown:g}x slower than A. Check that B is using the GPU, e.g.\n"
                   "  docker exec sidewalk-ai-api-dev python -c 'import torch; print(torch.cuda.is_available())'\n"

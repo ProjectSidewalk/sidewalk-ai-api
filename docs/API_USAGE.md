@@ -55,6 +55,10 @@ The API returns a JSON object containing the results of the analysis.
 | `validator_model_id`                        | String | The HuggingFace model id for the validator model used to make the prediction.                                                 |
 | `validator_training_date`                        | String | A standard MM-DD-YYYY date indicating when the validator model was trained.                                                 |
 
+##### Timing header
+
+Every response to an authenticated request includes a `Server-Timing` header with how long each stage took, in milliseconds, e.g. `pano;desc=cache;dur=310, project;dur=40, depth;dur=95, tagger;dur=30, validator;dur=45, total;dur=530`. Stages that didn't run are left out. It's meant for debugging speed (`curl -i` shows it) and isn't part of the JSON.
+
 #### Notes
 
 The fields returned in the response are conditional on the `label_type` due to model availability.
