@@ -62,6 +62,8 @@ All taggers, validators, and the depth model are instantiated **once at module i
 
 ## Conventions and gotchas
 
+- **Never run `git add -A`** (or `git add .`): stage files by name. The working tree often has untracked scratch files, like regression results and probe scripts, that must not be committed to this public repo.
+
 - **Auth:** a `before_request` hook in `main.py` requires `Authorization: Bearer <SIDEWALK_AI_API_KEY>` on every request (constant-time compare, 401 otherwise, fails closed when the env var is unset). The Sidewalk website sends the same key from its own `SIDEWALK_AI_API_KEY` env var, so rotate both together. Never commit the key or put it on a `docker run` command line.
 - `x` and `y` in API requests are **normalized** equirectangular coordinates in `[0, 1]`, not pixels. They get multiplied by the fixed 8192×4096 panorama size.
 - The set of supported label types is hardcoded in two lists in `main.py`: `TAGGER_LABEL_TYPES` (4 types) and `VALIDATOR_LABEL_TYPES` (5 types, includes `nocurbramp`). Adding a new label type requires updating both lists, `mappings.json` and `tag_thresholds.json` (for taggers), `accuracy_mappings/`, `MODEL_MAP` in `sidewalk_ai_api/model_map.py`, and `download_models.sh`.
