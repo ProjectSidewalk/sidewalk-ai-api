@@ -23,9 +23,11 @@ Each label is classified as:
 Then a download check sends one label per type to both instances with no city, forcing a download from Google, and
 checks that B succeeds wherever A does (scores aren't compared, since separate downloads can differ).
 
-It also compares speed: if B's median response time on the cached labels is more than --max-slowdown times A's, the
-run fails. That catches a model silently falling back to the CPU (every model picks CUDA only when torch can see the
-GPU) or a similar performance regression. The download check's times include Google and aren't compared.
+It also compares speed on the cached labels, failing if B's median is more than --max-slowdown times A's for either the
+whole request or the model stages alone (project, depth, tagger, validator; from the API's Server-Timing header). Most
+of a request is reading the panorama, so the model-stage check is what catches a model silently running on the CPU.
+Both instances must send Server-Timing (API 1.0.1+) for it to pass. The download check's times include Google and
+aren't compared.
 
 Exits 0 only if every label is "same" or DRIFT, B isn't too slow, and the download check passes. A SKIP also fails
 the run, so a broken setup (cache mount, instance down) can't pass by comparing nothing.
@@ -43,6 +45,7 @@ import urllib.request
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
+MODEL_STAGES = ("project", "depth", "tagger", "validator")  # The Server-Timing stages that run on the GPU.
 UNSURE_BELOW = 0.92  # The website treats a validation result as "unsure" below this estimated accuracy.
 DEFAULT_LABELS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "labels.csv")
 
@@ -184,6 +187,34 @@ def download_check(args, key, labels):
     return failures
 
 
+def speed_check(times, model_times, stage_times, max_slowdown):
+    """Prints how B's speed compares to A's on the cached labels. Returns True if B is too slow or it couldn't tell."""
+    if not times["A"]:
+        print("  SLOW: no label was served from the cache by both instances, so speed couldn't be compared.")
+        return True
+    too_slow = False
+    for what, t in (("whole request", times), ("model stages", model_times)):
+        if not t["A"] or not t["B"]:
+            missing = " and ".join(side for side in ("A", "B") if not t[side])
+            print(f"  SLOW: can't compare {what}: {missing} sent no Server-Timing header (needs API 1.0.1+).")
+            too_slow = True
+            continue
+        med_a, med_b = statistics.median(t["A"]), statistics.median(t["B"])
+        ratio = med_b / med_a if med_a else float("inf")
+        print(f"  median {what} time on {len(t['A'])} cached labels: A {med_a:.2f}s, B {med_b:.2f}s (B is {ratio:.2f}x A)")
+        if not ratio <= max_slowdown:
+            print(f"  SLOW: B is more than {max_slowdown:g}x slower than A on the {what}.")
+            too_slow = True
+    for side in ("A", "B"):
+        medians = {stage: statistics.median(v) for stage, v in stage_times[side].items()}
+        print(f"    {side} median by stage: {format_stages(medians) or 'not reported (no Server-Timing header)'}")
+    if too_slow:
+        print("  If B is slow, check that it's using the GPU, e.g.\n"
+              "  docker exec sidewalk-ai-api-dev python -c 'import torch; print(torch.cuda.is_available())'\n"
+              "  and that nvidia-smi lists a process for each instance.")
+    return too_slow
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--labels", default=DEFAULT_LABELS, help="CSV of label_id,label_type,pano_id,city_id,x,y")
@@ -208,6 +239,7 @@ def main():
     max_deltas = defaultdict(float)  # label_type -> largest score change seen
     sources = Counter()
     times = {"A": [], "B": []}  # Response times on labels both served successfully from the cache.
+    model_times = {"A": [], "B": []}  # Same labels, summed over MODEL_STAGES, when the instance reports them.
     stage_times = {"A": defaultdict(list), "B": defaultdict(list)}  # Same labels, per stage, from Server-Timing.
     version_diffs = set()  # (field, A value, B value) for api_version / model ids that differ
     out_file = open(args.out, "w", newline="") if args.out else None
@@ -244,6 +276,8 @@ def main():
                 for side, r in (("A", a), ("B", b)):
                     for stage, secs in r[3].items():
                         stage_times[side][stage].append(secs)
+                    if any(stage in r[3] for stage in MODEL_STAGES):
+                        model_times[side].append(sum(r[3].get(stage, 0) for stage in MODEL_STAGES))
             line = (f"[{i}/{len(labels)}] {verdict:5} {label['label_type']:14} label {label['label_id']} "
                     f"(A {a[2]:.1f}s, B {b[2]:.1f}s){'  [image from Google, not cache]' if from_google else ''}")
             print(line + ("".join(f"\n      {n}" for n in notes) if verdict != "same" else ""))
@@ -270,19 +304,7 @@ def main():
         print("  WARNING: some panoramas came from Google rather than the cache. Each instance downloads its own copy, and\n"
               "  Google's tiles can differ between downloads, so differences on those labels may be the image, not the code.\n"
               "  Check that the labels' city_id matches the cache's folder names (e.g. chicago-il).")
-    too_slow = False
-    if times["A"]:
-        med_a, med_b = statistics.median(times["A"]), statistics.median(times["B"])
-        ratio = med_b / med_a if med_a else float("inf")
-        too_slow = not ratio <= args.max_slowdown
-        print(f"  median time on {len(times['A'])} cached labels: A {med_a:.2f}s, B {med_b:.2f}s (B is {ratio:.2f}x A)")
-        for side in ("A", "B"):
-            medians = {stage: statistics.median(v) for stage, v in stage_times[side].items()}
-            print(f"    {side} median by stage: {format_stages(medians) or 'not reported (no Server-Timing header)'}")
-        if too_slow:
-            print(f"  SLOW: B is more than {args.max_slowdown:g}x slower than A. Check that B is using the GPU, e.g.\n"
-                  "  docker exec sidewalk-ai-api-dev python -c 'import torch; print(torch.cuda.is_available())'\n"
-                  "  and that nvidia-smi lists a process for each instance.")
+    too_slow = speed_check(times, model_times, stage_times, args.max_slowdown)
     for field, va, vb in sorted(version_diffs, key=str):
         print(f"  note: {field} differs: A={va} B={vb}")
     if verdicts["SKIP"]:

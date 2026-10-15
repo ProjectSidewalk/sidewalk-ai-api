@@ -21,7 +21,8 @@ case "$1" in
     echo "Usage: $0 [dev]" >&2; exit 1 ;;
 esac
 
-docker rm -f $IMAGE 2>/dev/null
+# Stop gracefully first, so requests in progress get up to 30 s to finish.
+docker stop -t 30 $IMAGE >/dev/null 2>&1; docker rm -f $IMAGE >/dev/null 2>&1
 docker run --gpus all --runtime nvidia -d -p 127.0.0.1:$PORT:5000 --name $IMAGE $RUN_OPTS \
       -e SIDEWALK_AI_API_KEY \
       -e SIDEWALK_SCRAPES_DIR=$PANOS_DIR \

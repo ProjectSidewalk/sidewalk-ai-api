@@ -11,7 +11,7 @@ This serves as an API implementation of the Project Sidewalk AI models for [tagg
 
 - Docker
 
-- NVIDIA GPU drivers
+- NVIDIA GPU drivers, version 580 or newer (the image uses CUDA 13.0), on a Turing or newer GPU
 
 	- If you aren't sure whether you have these, check if the `nvidia-smi` command works
 
@@ -73,7 +73,7 @@ To test changes next to the production instance, build and start with `dev`. Thi
 
 ```
 
-To redeploy prod, pull and run `./docker_build.sh && ./docker_start.sh`; the start script replaces the running container (expect a minute or two of downtime while the models load). Each build is also tagged with the API version, date, and commit it came from, e.g. `sidewalk-ai-api:1.0.1-2026-10-14-fbb1947`, so older images stay identifiable. To roll back, point the plain name at an older build and restart:
+To redeploy prod, pull and run `./docker_build.sh && ./docker_start.sh`; the start script replaces the running container (expect a minute or two of downtime while the models load). Each build is also tagged with the API version, date, and commit it came from, e.g. `sidewalk-ai-api:1.0.1-2026-10-14-1803-5a9487c`, so older images stay identifiable. To roll back, point the plain name at an older build and restart:
 
 ```bash
 
@@ -82,6 +82,8 @@ docker tag sidewalk-ai-api:<older-tag> sidewalk-ai-api
 ./docker_start.sh
 
 ```
+
+A rollback restores the code and checkpoints but not the validator models, which every start downloads from HuggingFace at their latest version.
 
 Old builds aren't deleted automatically, and each one takes several GB. Remove ones you no longer need with `docker rmi sidewalk-ai-api:<tag>`.
 
@@ -95,7 +97,7 @@ curl -X POST -H "Authorization: Bearer $SIDEWALK_AI_API_KEY" -F "label_type=curb
 
 ```
 Please note that x and y are normalized coordinates (between 0 and 1) on the equirectangular image.
->  ```{"api_version":"1.0.0","image_source":"cache","label_type":"curbramp","tag_scores":{"debris / pooled water":1.6009700232189061e-07,"missing tactile warning":0.9999617338180542,"narrow":9.827788744587451e-06,"not enough landing space":1.6410160696977982e-06,"not level with street":5.565861016521012e-08,"points into traffic":1.844670691752981e-06,"steep":4.775402430823306e-06,"surface problem":4.025090305503909e-08},"tagger_model_id":"validated-dino-cls-b-curbramp-tags-best","tagger_training_date":"12-03-2024","tags":["missing tactile warning"],"tags_not_present":["points into traffic","surface problem"],"validation_estimated_accuracy":0.9598393574297188,"validation_result":"correct","validation_score":0.999808132648468,"validator_model_id":"sidewalk-validator-ai-curbramp","validator_training_date":"01-26-2025"} ```
+>  ```{"api_version":"1.0.1","image_source":"cache","label_type":"curbramp","tag_scores":{"debris / pooled water":1.6009700232189061e-07,"missing tactile warning":0.9999617338180542,"narrow":9.827788744587451e-06,"not enough landing space":1.6410160696977982e-06,"not level with street":5.565861016521012e-08,"points into traffic":1.844670691752981e-06,"steep":4.775402430823306e-06,"surface problem":4.025090305503909e-08},"tagger_model_id":"validated-dino-cls-b-curbramp-tags-best","tagger_training_date":"12-03-2024","tags":["missing tactile warning"],"tags_not_present":["points into traffic","surface problem"],"validation_estimated_accuracy":0.9598393574297188,"validation_result":"correct","validation_score":0.999808132648468,"validator_model_id":"sidewalk-validator-ai-curbramp","validator_training_date":"01-26-2025"} ```
 
 Please note that `tag_scores` and `tags` will not be returned if the `label_type` does not match the following:
 `["crosswalk", "curbramp", "obstacle", "surfaceproblem"]`

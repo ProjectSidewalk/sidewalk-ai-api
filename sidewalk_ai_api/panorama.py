@@ -16,9 +16,12 @@ HEADERS = {
 
 # One session for every tile fetch, so tiles reuse connections to Google instead of each paying for a new TLS
 # handshake, which is slow under the base image's OpenSSL 3.0. The pool fits the 100 fetch threads. Cookies are
-# blocked so requests go out exactly as they did with a fresh requests.get per tile.
+# blocked so requests go out exactly as they did with a fresh requests.get per tile. Pooled connections can go stale
+# between cache misses, so a failed connection is retried once, and the timeout (connect, read) keeps a dead one from
+# hanging the request until gunicorn kills the worker. Anything worse is left to the panorama cache.
 SESSION = requests.Session()
-SESSION.mount("https://", requests.adapters.HTTPAdapter(pool_connections=1, pool_maxsize=100))
+SESSION.mount("https://", requests.adapters.HTTPAdapter(pool_connections=1, pool_maxsize=100, max_retries=1))
+TILE_TIMEOUT = (5, 10)
 SESSION.cookies.set_policy(DefaultCookiePolicy(allowed_domains=[]))
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -149,7 +152,7 @@ class Panorama:
             f"&x={x}&y={y}&zoom={zoom}"
         )
         try:
-            response = SESSION.get(url, headers=HEADERS)
+            response = SESSION.get(url, headers=HEADERS, timeout=TILE_TIMEOUT)
             if response.status_code == 200:
                 tile = Image.open(io.BytesIO(response.content))
                 if self.zoom != None or not self._is_black_tile(tile):
@@ -166,7 +169,7 @@ class Panorama:
                 f"&x={x}&y={y}&zoom=3"
             )
             try:
-                response = SESSION.get(fallback_url, headers=HEADERS)
+                response = SESSION.get(fallback_url, headers=HEADERS, timeout=TILE_TIMEOUT)
                 if response.status_code == 200:
                     tile = Image.open(io.BytesIO(response.content))
                     self.zoom = 3

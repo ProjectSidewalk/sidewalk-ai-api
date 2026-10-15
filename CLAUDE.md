@@ -18,17 +18,18 @@ git submodule init && git submodule update
 Build and run via Docker (GPU required — needs CUDA + nvidia-container-toolkit, ~9–10 GB VRAM per instance):
 
 ```bash
-./docker_build.sh       # builds sidewalk-ai-api, also tagged <API_VERSION>-<date>-<commit> for rollback
+./docker_build.sh       # builds sidewalk-ai-api, also tagged <API_VERSION>-<date>-<time>-<commit> for rollback
 ./docker_start.sh       # runs it as container sidewalk-ai-api on 127.0.0.1:60654 → 5000, restart unless-stopped
 ./docker_build.sh dev && ./docker_start.sh dev   # test instance alongside prod: sidewalk-ai-api-dev on 127.0.0.1:60655
 ```
 
-Starting either instance replaces the running container of the same name, so `./docker_start.sh` is also the redeploy step. `docker_start.sh` sources `SIDEWALK_AI_API_KEY` from `~/.sidewalk-ai-api.env` (refuses to start without it), and mounts the lab's panorama cache read-only, setting `SIDEWALK_SCRAPES_DIR` to the same path. Ports are bound to loopback only; on the server, an https reverse proxy fronts prod. To reach the dev instance from another machine, use an SSH tunnel (`ssh -L 60655:127.0.0.1:60655 <server>`). The container runs `ignition.sh` (gunicorn, 1 worker, 120 s timeout).
+Starting either instance stops (30 s grace for in-flight requests) and replaces the running container of the same name, so `./docker_start.sh` is also the redeploy step. `docker_start.sh` sources `SIDEWALK_AI_API_KEY` from `~/.sidewalk-ai-api.env` (refuses to start without it), and mounts the lab's panorama cache read-only, setting `SIDEWALK_SCRAPES_DIR` to the same path. Ports are bound to loopback only; on the server, an https reverse proxy fronts prod. To reach the dev instance from another machine, use an SSH tunnel (`ssh -L 60655:127.0.0.1:60655 <server>`). The container runs `ignition.sh` (gunicorn, 1 worker, 120 s timeout).
 
 Run locally without Docker (requires CUDA, the submodule, and downloaded checkpoints):
 
 ```bash
 export SIDEWALK_AI_API_KEY=<key>          # required; without it every request is a 401
+export SIDEWALK_ALLOW_CPU=1                # only without a GPU; otherwise the app refuses to start (see below)
 gunicorn -w 1 -b 0.0.0.0:5000 main:app   # production form (see ignition.sh)
 python main.py                            # dev form, Flask's built-in server
 ```
@@ -40,7 +41,7 @@ curl -X POST -H "Authorization: Bearer $SIDEWALK_AI_API_KEY" -F "label_type=curb
      -F "x=0.77746582031" -F "y=0.58459472656" http://127.0.0.1:5000/process
 ```
 
-There is no unit test suite, linter, or formatter configured. For changes that could affect model outputs (dependency bumps, preprocessing, refactors), run the regression check on the server with prod and a dev instance both up: `python3 regression/compare.py` sends the 50 labels in `regression/labels.csv` to both (all served from the panorama cache, so both see identical pixels) and reports changed outcomes (FAIL) or score movement beyond `--tolerance` (DRIFT), then forces one Google download per label type to check the download path still works on dev. It also fails if dev's median response time on the cached labels is more than `--max-slowdown` (1.5×) prod's, which catches a silent fallback to the CPU (every model uses CUDA only if torch sees the GPU). It passes (exit 0) only with no FAIL, no SKIP (both errored), no slowdown, and a clean download check. It only uses the standard library. Note that validator weights come from HuggingFace at container start without a pinned revision, so prod and dev can differ in weights if a validator repo was updated in between.
+There is no unit test suite, linter, or formatter configured. For changes that could affect model outputs (dependency bumps, preprocessing, refactors), run the regression check on the server with prod and a dev instance both up: `python3 regression/compare.py` sends the 50 labels in `regression/labels.csv` to both (all served from the panorama cache, so both see identical pixels) and reports changed outcomes (FAIL) or score movement beyond `--tolerance` (DRIFT), then forces one Google download per label type to check the download path still works on dev. It also fails if dev's median time on the cached labels is more than `--max-slowdown` (1.5×) prod's, either for the whole request or for the GPU stages alone (from `Server-Timing`; most of a request is reading the panorama), so both instances must be API 1.0.1+. It passes (exit 0) only with no FAIL, no SKIP (both errored), no slowdown, and a clean download check. It only uses the standard library. Note that validator weights come from HuggingFace at container start without a pinned revision, so prod and dev can differ in weights if a validator repo was updated in between.
 
 ## Request flow (`/process`)
 
@@ -55,6 +56,8 @@ Form fields: `label_type`, `panorama_id`, `x`, `y` (required), and `city` (optio
 
 Each stage's duration (`pano`, `project`, `depth`, `tagger`, `validator`, plus `total`) is returned in a `Server-Timing` response header via the `timed()` context manager and an `after_request` hook in `main.py`; the regression check reports per-stage medians from it.
 
+At startup `main.py` exits (code 3, which stops gunicorn) if torch can't see a GPU, since every model would otherwise silently fall back to the CPU; `SIDEWALK_ALLOW_CPU=1` overrides this for local testing.
+
 All taggers, validators, and the depth model are instantiated **once at module import** in `main.py` and live on the GPU for the lifetime of the process. Cold start takes a minute or two; gunicorn is intentionally run with a single worker.
 
 ## Conventions and gotchas
@@ -66,4 +69,4 @@ All taggers, validators, and the depth model are instantiated **once at module i
 - `API_VERSION` is read from the file of the same name at startup and echoed in every response. Bump it when behavior changes.
 - **Dependencies:** `requirements.txt` is a full pinned freeze, installed with `pip install --no-deps --break-system-packages` into the system Python of the `pytorch/pytorch:2.14.1-cuda13.0` base image (Ubuntu 24.04, Python 3.12; there is no conda env). Because of `--no-deps`, bumping a package means checking its own requirements by hand. torch/torchvision/triton must exactly match what the base image ships, so pip leaves them alone; otherwise pip would swap in a PyPI build without its CUDA libraries. Major bumps of torch or transformers can change model outputs, so compare outputs before and after. All checkpoints load under `torch.load`'s `weights_only=True` default; keep it that way for new checkpoints (save plain state dicts).
 - The `Depth-Anything-V2` directory is a git submodule and is added to `sys.path` at runtime in `depthanything.py` (`Depth-Anything-V2/metric_depth`). The `dinov2/` directory is a vendored copy of Meta's DINOv2 (used directly by `tagger.py` via `from dinov2.models.vision_transformer import vit_base`); do not treat it like normal first-party code.
-- Tile fetches go to Google's undocumented Street View tile API, which requires browser-like headers (`HEADERS` in `panorama.py`). All fetches share one `requests.Session` (`SESSION`) so connections are reused; a fresh connection per tile made downloads ~2× slower under the base image's OpenSSL 3.0. There is no auth, retry, or rate-limit handling beyond a single zoom-3 fallback — be conservative if you change `_fetch_panorama` / `_fetch_tile`.
+- Tile fetches go to Google's undocumented Street View tile API, which requires browser-like headers (`HEADERS` in `panorama.py`). All fetches share one `requests.Session` (`SESSION`, one retry, `TILE_TIMEOUT`) so connections are reused; a fresh connection per tile made downloads ~2× slower under the base image's OpenSSL 3.0. There is no auth, retry, or rate-limit handling beyond a single zoom-3 fallback — be conservative if you change `_fetch_panorama` / `_fetch_tile`.

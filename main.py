@@ -10,8 +10,11 @@ import cv2
 import hmac
 import json
 import logging
+import math
 import os
+import sys
 import time
+import torch
 
 SCRAPES_DIR = os.environ.get("SIDEWALK_SCRAPES_DIR")
 
@@ -21,6 +24,14 @@ EXPECTED_AUTH_HEADER = f"Bearer {API_KEY}"
 logger = logging.getLogger(__name__)
 if not API_KEY:
     logger.warning("SIDEWALK_AI_API_KEY is not set; every request will be rejected with 401.")
+
+# Every model quietly runs on the CPU when torch can't see a GPU (a driver too old for the image's CUDA, a container
+# started without --gpus all), which still answers every request, just many times slower. Refuse to start instead.
+# Exit code 3 is gunicorn's "worker failed to boot", which stops gunicorn rather than respawning the worker forever.
+if not torch.cuda.is_available() and os.environ.get("SIDEWALK_ALLOW_CPU") != "1":
+    print("CUDA isn't available, so every model would run on the CPU. Check the GPU driver and that the container "
+          "has the GPU (docker run --gpus all), or set SIDEWALK_ALLOW_CPU=1 to run on the CPU.", file=sys.stderr)
+    sys.exit(3)
 
 app = Flask(__name__)
 
@@ -84,9 +95,12 @@ def process():
     if "y" not in request.form:
         return jsonify({"error": "Missing y parameter"}), 400
 
-    label_x = float(request.form["x"])
-    label_y = float(request.form["y"])
-    if label_x < 0 or label_x > 1 or label_y < 0 or label_y > 1:
+    try:
+        label_x = float(request.form["x"])
+        label_y = float(request.form["y"])
+    except ValueError:
+        return jsonify({"error": "x and y must be numbers"}), 400
+    if not (math.isfinite(label_x) and math.isfinite(label_y)) or label_x < 0 or label_x > 1 or label_y < 0 or label_y > 1:
         return jsonify({"error": "x and y must be between 0 and 1. They should be normalized values."}), 400
 
     label_type = request.form["label_type"]
