@@ -2,6 +2,7 @@ import os
 import time
 import requests
 import numpy as np
+from http.cookiejar import DefaultCookiePolicy
 
 HEADERS = {
     "User-Agent": (
@@ -12,6 +13,15 @@ HEADERS = {
     "Referer": "https://www.google.com/maps",
     "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
 }
+
+# Share one session across tile fetches so connections get reused (opening a new one per tile was ~2x slower).
+# Cookies are blocked so requests look the same as before. Idle connections can go dead between downloads, so retry
+# once and time out instead of hanging until gunicorn kills the worker.
+SESSION = requests.Session()
+SESSION.mount("https://", requests.adapters.HTTPAdapter(pool_connections=1, pool_maxsize=100, max_retries=1))
+TILE_TIMEOUT = (5, 10)
+SESSION.cookies.set_policy(DefaultCookiePolicy(allowed_domains=[]))
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import io
 from PIL import Image
@@ -140,7 +150,7 @@ class Panorama:
             f"&x={x}&y={y}&zoom={zoom}"
         )
         try:
-            response = requests.get(url, headers=HEADERS)
+            response = SESSION.get(url, headers=HEADERS, timeout=TILE_TIMEOUT)
             if response.status_code == 200:
                 tile = Image.open(io.BytesIO(response.content))
                 if self.zoom != None or not self._is_black_tile(tile):
@@ -157,7 +167,7 @@ class Panorama:
                 f"&x={x}&y={y}&zoom=3"
             )
             try:
-                response = requests.get(fallback_url, headers=HEADERS)
+                response = SESSION.get(fallback_url, headers=HEADERS, timeout=TILE_TIMEOUT)
                 if response.status_code == 200:
                     tile = Image.open(io.BytesIO(response.content))
                     self.zoom = 3

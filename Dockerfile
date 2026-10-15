@@ -1,17 +1,17 @@
-FROM pytorch/pytorch:2.5.1-cuda11.8-cudnn9-runtime
+FROM pytorch/pytorch:2.14.1-cuda13.0-cudnn9-runtime
 
 WORKDIR /app
 
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install wget gcc ffmpeg libsm6 libxext6 -y && rm -rf /var/lib/apt/lists/*
+
+# Install dependencies and models before copying the code, so code changes don't redo these large steps.
+# --break-system-packages: the base image's torch lives in the system Python, so install next to it.
+COPY requirements.txt download_models.sh ./
+RUN pip install --no-deps --no-cache-dir --break-system-packages -r requirements.txt
+RUN mkdir -p checkpoints && bash download_models.sh
+
 COPY . /app
-
-ENV DEBIAN_FRONTEND noninteractive
-RUN apt-get update && apt-get install wget gcc mono-mcs libgmp3-dev libmpc-dev ffmpeg libsm6 libxext6 -y
-
-RUN pip install --no-deps --no-cache-dir -r requirements.txt
-RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-
-RUN chmod +x ./download_models.sh && ./download_models.sh
-RUN chmod +x ./ignition.sh
 
 EXPOSE 5000
 

@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify
+from contextlib import contextmanager
+from flask import Flask, g, request, jsonify
 from sidewalk_ai_api.tagger import ImageTagger
 from sidewalk_ai_api.validator import ImageValidator
 from PIL import Image
@@ -9,7 +10,11 @@ import cv2
 import hmac
 import json
 import logging
+import math
 import os
+import sys
+import time
+import torch
 
 SCRAPES_DIR = os.environ.get("SIDEWALK_SCRAPES_DIR")
 
@@ -19,6 +24,13 @@ EXPECTED_AUTH_HEADER = f"Bearer {API_KEY}"
 logger = logging.getLogger(__name__)
 if not API_KEY:
     logger.warning("SIDEWALK_AI_API_KEY is not set; every request will be rejected with 401.")
+
+# Without a GPU every model silently runs on the CPU, many times slower, so refuse to start.
+# Exit code 3 makes gunicorn stop instead of restarting the worker forever.
+if not torch.cuda.is_available() and os.environ.get("SIDEWALK_ALLOW_CPU") != "1":
+    print("No GPU found. Check the GPU driver and that the container was started with --gpus all, "
+          "or set SIDEWALK_ALLOW_CPU=1 to run on the CPU.", file=sys.stderr)
+    sys.exit(3)
 
 app = Flask(__name__)
 
@@ -30,6 +42,31 @@ def require_api_key():
     if not API_KEY or not hmac.compare_digest(provided.encode(), EXPECTED_AUTH_HEADER.encode()):
         logger.warning(f"Rejected request from {request.remote_addr}: missing or invalid API key")
         return jsonify({"error": "Missing or invalid API key"}), 401, {"WWW-Authenticate": "Bearer"}
+    g.start = time.perf_counter()
+    g.timings = {}
+
+
+@contextmanager
+def timed(stage):
+    """Records how long a stage of the request took, for the Server-Timing header."""
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        g.timings[stage] = time.perf_counter() - start
+
+
+@app.after_request
+def add_server_timing(response):
+    """Adds each stage's time to a Server-Timing header, e.g. `pano;desc=cache;dur=310, depth;dur=95, ..., total;dur=520`."""
+    if "start" in g:
+        stages = []
+        for name, secs in g.timings.items():
+            desc = f";desc={g.pano_source}" if name == "pano" and g.get("pano_source") else ""
+            stages.append(f"{name}{desc};dur={secs * 1000:.0f}")
+        stages.append(f"total;dur={(time.perf_counter() - g.start) * 1000:.0f}")
+        response.headers["Server-Timing"] = ", ".join(stages)
+    return response
 
 
 depthanything = DepthAnythingPredictor()
@@ -56,9 +93,12 @@ def process():
     if "y" not in request.form:
         return jsonify({"error": "Missing y parameter"}), 400
 
-    label_x = float(request.form["x"])
-    label_y = float(request.form["y"])
-    if label_x < 0 or label_x > 1 or label_y < 0 or label_y > 1:
+    try:
+        label_x = float(request.form["x"])
+        label_y = float(request.form["y"])
+    except ValueError:
+        return jsonify({"error": "x and y must be numbers"}), 400
+    if not (math.isfinite(label_x) and math.isfinite(label_y)) or label_x < 0 or label_x > 1 or label_y < 0 or label_y > 1:
         return jsonify({"error": "x and y must be between 0 and 1. They should be normalized values."}), 400
 
     label_type = request.form["label_type"]
@@ -72,14 +112,18 @@ def process():
     if SCRAPES_DIR and city and len(panorama_id) >= 2:
         cached_image_path = os.path.join(SCRAPES_DIR, city, panorama_id[:2], f"{panorama_id}.jpg")
 
-    panorama = Panorama(panorama_id, cached_image_path=cached_image_path)
+    with timed("pano"):
+        panorama = Panorama(panorama_id, cached_image_path=cached_image_path)
+    g.pano_source = panorama.image_source
     if panorama.panorama_image is None:
         return jsonify({"error": f"Failed to fetch panorama"}), 502
-    height, width = panorama.panorama_image.shape[:2]
-    theta, phi = panorama.get_perspective_center_params(label_x * width, label_y * height)
-    perspective_image = panorama.to_perspective_image(90, theta, phi, width // 4, width // 4)
+    with timed("project"):
+        height, width = panorama.panorama_image.shape[:2]
+        theta, phi = panorama.get_perspective_center_params(label_x * width, label_y * height)
+        perspective_image = panorama.to_perspective_image(90, theta, phi, width // 4, width // 4)
 
-    depth = depthanything.predict_depth(perspective_image)
+    with timed("depth"):
+        depth = depthanything.predict_depth(perspective_image)
 
     center_x, center_y = perspective_image.shape[1] // 2, perspective_image.shape[0] // 2
     img_h, img_w = perspective_image.shape[:2]
@@ -108,7 +152,8 @@ def process():
     if label_type in TAGGER_LABEL_TYPES:
         classifier = taggers[label_type]
         try:
-            tags_present, tags_not_present, confidence_scores = classifier.inference(perspective_image)
+            with timed("tagger"):
+                tags_present, tags_not_present, confidence_scores = classifier.inference(perspective_image)
             response.update({
                 "tags": tags_present,
                 "tags_not_present": tags_not_present,
@@ -122,7 +167,8 @@ def process():
     # Perform validation if label_type is in VALIDATOR_LABEL_TYPES
     validator = validators[label_type]
     try:
-        validation_result, validation_confidence = validator.validate(perspective_image)
+        with timed("validator"):
+            validation_result, validation_confidence = validator.validate(perspective_image)
 
         # Find the highest mapping that's less than or equal to the confidence
         accuracy = 0

@@ -23,14 +23,20 @@ Each label is classified as:
 Then a download check sends one label per type to both instances with no city, forcing a download from Google, and
 checks that B succeeds wherever A does (scores aren't compared, since separate downloads can differ).
 
-Exits 0 only if every label is "same" or DRIFT and the download check passes. A SKIP also fails the run, so a broken
-setup (cache mount, instance down) can't pass by comparing nothing.
+It also compares speed on the cached labels, failing if B's median is more than --max-slowdown times A's, for the whole
+request or for just the model stages (from the API's Server-Timing header). Most of a request is reading the
+panorama, so the model-stage check is what catches a model running on the CPU. Both instances must be API 1.0.1+
+(which added Server-Timing) for it to pass.
+
+Exits 0 only if every label is "same" or DRIFT, B isn't too slow, and the download check passes. A SKIP also fails
+the run, so a broken setup (cache mount, instance down) can't pass by comparing nothing.
 """
 
 import argparse
 import csv
 import json
 import os
+import statistics
 import time
 import urllib.error
 import urllib.parse
@@ -38,6 +44,7 @@ import urllib.request
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
+MODEL_STAGES = ("project", "depth", "tagger", "validator")  # The Server-Timing stages that run on the GPU.
 UNSURE_BELOW = 0.92  # The website treats a validation result as "unsure" below this estimated accuracy.
 DEFAULT_LABELS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "labels.csv")
 
@@ -60,9 +67,27 @@ def load_api_key():
     return key
 
 
+def parse_server_timing(header):
+    """Turns a Server-Timing header ("pano;desc=cache;dur=310, depth;dur=95, ...") into {stage: seconds}."""
+    stages = {}
+    for entry in (header or "").split(","):
+        name, *params = [p.strip() for p in entry.split(";")]
+        for param in params:
+            if param.startswith("dur="):
+                try:
+                    stages[name] = float(param[4:]) / 1000
+                except ValueError:
+                    pass
+    return stages
+
+
+def format_stages(stages):
+    return ", ".join(f"{name} {secs:.2f}" for name, secs in stages.items() if name != "total")
+
+
 def call(url, key, label, timeout, use_cache=True):
-    """Returns (status, parsed JSON or None, seconds). With use_cache=False, the city is left out so the API has to
-    download the panorama from Google."""
+    """Returns (status, parsed JSON or None, seconds, {stage: seconds} from Server-Timing). With use_cache=False, the
+    city is left out so the API has to download the panorama from Google."""
     data = urllib.parse.urlencode({
         "label_type": label["label_type"],
         "panorama_id": label["pano_id"],
@@ -74,16 +99,16 @@ def call(url, key, label, timeout, use_cache=True):
     t0 = time.perf_counter()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            status, body = resp.status, resp.read()
+            status, body, timing = resp.status, resp.read(), resp.headers.get("Server-Timing")
     except urllib.error.HTTPError as e:
-        status, body = e.code, e.read()
+        status, body, timing = e.code, e.read(), e.headers.get("Server-Timing")
     except Exception as e:
-        return f"error: {e}", None, time.perf_counter() - t0
+        return f"error: {e}", None, time.perf_counter() - t0, {}
     try:
         parsed = json.loads(body)
     except ValueError:
         parsed = None
-    return status, parsed, time.perf_counter() - t0
+    return status, parsed, time.perf_counter() - t0, parse_server_timing(timing)
 
 
 def website_validation(resp):
@@ -97,8 +122,8 @@ def website_validation(resp):
 
 def compare(a, b, tolerance):
     """Returns (verdict, list of difference descriptions, dict of score deltas)."""
-    status_a, ra, _ = a
-    status_b, rb, _ = b
+    status_a, ra = a[:2]
+    status_b, rb = b[:2]
     if status_a != status_b:
         return "FAIL", [f"status {status_a} -> {status_b}"], {}
     if status_a != 200:
@@ -155,8 +180,37 @@ def download_check(args, key, labels):
             source = f", image_source={b[1].get('image_source')}" if b[0] == 200 and isinstance(b[1], dict) else ""
             result = f"FAIL (A {a[0]}, B {b[0]}{source})"
             failures += 1
-        print(f"  {label['label_type']:14} label {label['label_id']}: {result} (A {a[2]:.1f}s, B {b[2]:.1f}s)")
+        stages = "".join(f"\n      {side}: {format_stages(r[3])}" for side, r in (("A", a), ("B", b)) if r[3])
+        print(f"  {label['label_type']:14} label {label['label_id']}: {result} (A {a[2]:.1f}s, B {b[2]:.1f}s){stages}")
     return failures
+
+
+def speed_check(times, model_times, stage_times, max_slowdown):
+    """Prints how B's speed compares to A's on the cached labels. Returns True if B is too slow or it couldn't tell."""
+    if not times["A"]:
+        print("  SLOW: no label was served from the cache by both instances, so speed couldn't be compared.")
+        return True
+    too_slow = False
+    for what, t in (("whole request", times), ("model stages", model_times)):
+        if not t["A"] or not t["B"]:
+            missing = " and ".join(side for side in ("A", "B") if not t[side])
+            print(f"  SLOW: can't compare {what}: {missing} sent no Server-Timing header (needs API 1.0.1+).")
+            too_slow = True
+            continue
+        med_a, med_b = statistics.median(t["A"]), statistics.median(t["B"])
+        ratio = med_b / med_a if med_a else float("inf")
+        print(f"  median {what} time on {len(t['A'])} cached labels: A {med_a:.2f}s, B {med_b:.2f}s (B is {ratio:.2f}x A)")
+        if not ratio <= max_slowdown:
+            print(f"  SLOW: B is more than {max_slowdown:g}x slower than A on the {what}.")
+            too_slow = True
+    for side in ("A", "B"):
+        medians = {stage: statistics.median(v) for stage, v in stage_times[side].items()}
+        print(f"    {side} median by stage: {format_stages(medians) or 'not reported (no Server-Timing header)'}")
+    if too_slow:
+        print("  If B is slow, check that it's using the GPU, e.g.\n"
+              "  docker exec sidewalk-ai-api-dev python -c 'import torch; print(torch.cuda.is_available())'\n"
+              "  and that nvidia-smi lists a process for each instance.")
+    return too_slow
 
 
 def main():
@@ -167,6 +221,8 @@ def main():
     parser.add_argument("--tolerance", type=float, default=1e-3,
                         help="Largest score change (absolute) still counted as the same (default 1e-3)")
     parser.add_argument("--timeout", type=int, default=300, help="Per-request timeout in seconds (default 300)")
+    parser.add_argument("--max-slowdown", type=float, default=1.5,
+                        help="Fail if B's median time on cached labels is more than this many times A's (default 1.5)")
     parser.add_argument("--out", help="Optional CSV path to save both full responses for every label")
     args = parser.parse_args()
 
@@ -180,12 +236,15 @@ def main():
     verdicts = Counter()
     max_deltas = defaultdict(float)  # label_type -> largest score change seen
     sources = Counter()
+    times = {"A": [], "B": []}  # Request times on labels both served from the cache.
+    model_times = {"A": [], "B": []}  # Same labels, model stages only.
+    stage_times = {"A": defaultdict(list), "B": defaultdict(list)}  # Same labels, per stage.
     version_diffs = set()  # (field, A value, B value) for api_version / model ids that differ
     out_file = open(args.out, "w", newline="") if args.out else None
     writer = None
     if out_file:
         writer = csv.DictWriter(out_file, fieldnames=list(labels[0].keys()) + [
-            "verdict", "notes", "status_a", "response_a", "status_b", "response_b"])
+            "verdict", "notes", "seconds_a", "seconds_b", "stages_a", "stages_b", "status_a", "response_a", "status_b", "response_b"])
         writer.writeheader()
     with ThreadPoolExecutor(max_workers=2) as pool:
         for i, label in enumerate(labels, 1):
@@ -198,7 +257,7 @@ def main():
             verdicts[verdict] += 1
             if deltas:
                 max_deltas[label["label_type"]] = max(max_deltas[label["label_type"]], max(deltas.values()))
-            for side, (status, resp, _) in (("A", a), ("B", b)):
+            for side, (status, resp, *_) in (("A", a), ("B", b)):
                 if status == 200 and isinstance(resp, dict):
                     sources[f"{side}:{resp.get('image_source')}"] += 1
             if a[0] == b[0] == 200 and isinstance(a[1], dict) and isinstance(b[1], dict):
@@ -208,12 +267,22 @@ def main():
                         version_diffs.add((field, a[1].get(field), b[1].get(field)))
 
             from_google = any(isinstance(r, dict) and r.get("image_source") != "cache"
-                              for s, r, _ in (a, b) if s == 200)
+                              for s, r, *_ in (a, b) if s == 200)
+            if a[0] == b[0] == 200 and not from_google:
+                times["A"].append(a[2])
+                times["B"].append(b[2])
+                for side, r in (("A", a), ("B", b)):
+                    for stage, secs in r[3].items():
+                        stage_times[side][stage].append(secs)
+                    if any(stage in r[3] for stage in MODEL_STAGES):
+                        model_times[side].append(sum(r[3].get(stage, 0) for stage in MODEL_STAGES))
             line = (f"[{i}/{len(labels)}] {verdict:5} {label['label_type']:14} label {label['label_id']} "
                     f"(A {a[2]:.1f}s, B {b[2]:.1f}s){'  [image from Google, not cache]' if from_google else ''}")
             print(line + ("".join(f"\n      {n}" for n in notes) if verdict != "same" else ""))
             if writer:
                 writer.writerow({**label, "verdict": verdict, "notes": "; ".join(notes),
+                                 "seconds_a": f"{a[2]:.2f}", "seconds_b": f"{b[2]:.2f}",
+                                 "stages_a": format_stages(a[3]), "stages_b": format_stages(b[3]),
                                  "status_a": a[0], "response_a": json.dumps(a[1]),
                                  "status_b": b[0], "response_b": json.dumps(b[1])})
                 out_file.flush()
@@ -233,13 +302,14 @@ def main():
         print("  WARNING: some panoramas came from Google rather than the cache. Each instance downloads its own copy, and\n"
               "  Google's tiles can differ between downloads, so differences on those labels may be the image, not the code.\n"
               "  Check that the labels' city_id matches the cache's folder names (e.g. chicago-il).")
+    too_slow = speed_check(times, model_times, stage_times, args.max_slowdown)
     for field, va, vb in sorted(version_diffs, key=str):
         print(f"  note: {field} differs: A={va} B={vb}")
     if verdicts["SKIP"]:
         print(f"  {verdicts['SKIP']} label(s) errored on both instances and weren't compared. Every label is cached, so\n"
               "  that points at the setup (cache mount, instance down) rather than the change being tested.")
 
-    passed = not verdicts["FAIL"] and not verdicts["SKIP"] and not download_failures
+    passed = not verdicts["FAIL"] and not verdicts["SKIP"] and not download_failures and not too_slow
     print(f"\n{'PASS' if passed else 'NOT PASSED'}")
     raise SystemExit(0 if passed else 1)
 
