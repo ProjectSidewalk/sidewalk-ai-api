@@ -54,6 +54,7 @@ The API returns a JSON object containing the results of the analysis.
 | `validation_estimated_accuracy` | Float            | An estimate of the model's accuracy for the given prediction. We calculate this because a model's confidence is not necessarily equal to the probability of it being correct. More info [here](https://towardsdatascience.com/a-comprehensive-guide-on-model-calibration-part-1-of-4-73466eb5e09a/).                                                                                                               |
 | `validator_model_id`                        | String | The HuggingFace model id for the validator model used to make the prediction.                                                 |
 | `validator_training_date`                        | String | A standard MM-DD-YYYY date indicating when the validator model was trained.                                                 |
+| `validator_revision`                        | String | The HuggingFace commit of the validator model, which identifies its exact weights.                                                 |
 
 ##### Timing header
 
@@ -64,7 +65,7 @@ Responses also include a `Server-Timing` header with how long each step took in 
 The fields returned in the response are conditional on the `label_type` due to model availability.
 
 -   **Tag-related fields** (`tag_scores`, `tags`, `tags_not_present`, `tagger_model_id`, `tagger_training_date`) are returned for: `["crosswalk", "curbramp", "obstacle", "surfaceproblem"]`.
--   **Validation-related fields** (`validation_result`, `validation_score`, `validation_estimated_accuracy`, `validator_model_id`, `validator_training_date`) are returned for: `["crosswalk", "curbramp", "obstacle", "surfaceproblem", "nocurbramp"]`.
+-   **Validation-related fields** (`validation_result`, `validation_score`, `validation_estimated_accuracy`, `validator_model_id`, `validator_training_date`, `validator_revision`) are returned for: `["crosswalk", "curbramp", "obstacle", "surfaceproblem", "nocurbramp"]`.
 
 If a `label_type` is submitted that does not support a particular analysis, the corresponding fields will be omitted from the JSON response.
 

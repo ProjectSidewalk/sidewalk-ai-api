@@ -264,7 +264,7 @@ def main():
             if status == 200 and isinstance(resp, dict):
                 sources[f"{side}:{resp.get('image_source')}"] += 1
         if a[0] == b[0] == 200 and isinstance(a[1], dict) and isinstance(b[1], dict):
-            for field in ("api_version", "validator_model_id", "validator_training_date",
+            for field in ("api_version", "validator_model_id", "validator_training_date", "validator_revision",
                           "tagger_model_id", "tagger_training_date"):
                 if a[1].get(field) != b[1].get(field):
                     version_diffs.add((field, a[1].get(field), b[1].get(field)))

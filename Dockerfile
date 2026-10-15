@@ -10,6 +10,10 @@ RUN apt-get update && apt-get install wget gcc ffmpeg libsm6 libxext6 -y && rm -
 COPY requirements.txt download_models.sh ./
 RUN pip install --no-deps --no-cache-dir --break-system-packages -r requirements.txt
 RUN mkdir -p checkpoints && bash download_models.sh
+# Bake in the validator weights pinned in MODEL_MAP, so containers start without downloading ~6 GB from HuggingFace.
+COPY download_validators.py ./
+COPY sidewalk_ai_api/model_map.py sidewalk_ai_api/
+RUN python3 download_validators.py
 
 COPY . /app
 
@@ -17,6 +21,9 @@ COPY . /app
 # each one to the kernel when freed, so the next is fresh memory that has to be faulted in page by page. When the
 # server is short of free memory, that took ~300 ms per array instead of ~15 ms.
 ENV MALLOC_MMAP_THRESHOLD_=1073741824 MALLOC_TRIM_THRESHOLD_=4294967296
+
+# Load the baked-in validators without contacting HuggingFace, so a missing file fails at startup instead of downloading.
+ENV HF_HUB_OFFLINE=1
 
 EXPOSE 5000
 
