@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Taggers and validators load from HuggingFace at the revisions in MODEL_MAP (see download_hf_models.py).
 # The URL is pinned to a repo commit so a new upload to HuggingFace never changes a build by surprise.

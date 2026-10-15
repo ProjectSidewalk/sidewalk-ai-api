@@ -3,7 +3,7 @@
 
   
 
-This serves as an API implementation of the Project Sidewalk AI models for [tagging](https://huggingface.co/projectsidewalk/sidewalk-tagger-ai-models) and [validating](https://huggingface.co/collections/projectsidewalk/project-sidewalk-validator-models-6797bd158d5e385e464dbe45) labels.
+This serves as an API implementation of the Project Sidewalk AI models for tagging ([crosswalk](https://huggingface.co/projectsidewalk/sidewalk-tagger-ai-crosswalk), [curb ramp](https://huggingface.co/projectsidewalk/sidewalk-tagger-ai-curbramp), [obstacle](https://huggingface.co/projectsidewalk/sidewalk-tagger-ai-obstacle), [surface problem](https://huggingface.co/projectsidewalk/sidewalk-tagger-ai-surfaceproblem)) and [validating](https://huggingface.co/collections/projectsidewalk/project-sidewalk-validator-models-6797bd158d5e385e464dbe45) labels.
 
 **This README contains the basic steps for setting up the API, but for a detailed usage guide on using the API, please see [API_USAGE.md](https://github.com/ProjectSidewalk/sidewalk-ai-api/blob/main/docs/API_USAGE.md)**  
 

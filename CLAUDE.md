@@ -30,7 +30,7 @@ Run locally without Docker (requires CUDA, the submodule, and downloaded checkpo
 ```bash
 export SIDEWALK_AI_API_KEY=<key>          # required; without it every request is a 401
 export SIDEWALK_ALLOW_CPU=1                # only on a machine without a GPU
-gunicorn -w 1 -b 0.0.0.0:5000 main:app   # production form (see ignition.sh)
+gunicorn -w 1 -b 0.0.0.0:5000 --timeout 120 main:app   # production form (see ignition.sh)
 python main.py                            # dev form, Flask's built-in server
 ```
 

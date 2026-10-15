@@ -7,8 +7,9 @@ RUN apt-get update && apt-get install wget gcc ffmpeg libsm6 libxext6 -y && rm -
 
 # Install dependencies and models before copying the code, so code changes don't redo these large steps.
 # --break-system-packages: the base image's torch lives in the system Python, so install next to it.
-COPY requirements.txt download_models.sh ./
+COPY requirements.txt ./
 RUN pip install --no-deps --no-cache-dir --break-system-packages -r requirements.txt
+COPY download_models.sh ./
 RUN mkdir -p checkpoints && bash download_models.sh
 # Bake in the tagger and validator weights pinned in MODEL_MAP, so containers start without downloading them.
 COPY download_hf_models.py ./
