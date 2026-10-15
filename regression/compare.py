@@ -42,7 +42,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
 
 MODEL_STAGES = ("project", "depth", "tagger", "validator")  # The Server-Timing stages that run on the GPU.
 UNSURE_BELOW = 0.92  # The website treats a validation result as "unsure" below this estimated accuracy.
@@ -246,46 +245,50 @@ def main():
         writer = csv.DictWriter(out_file, fieldnames=list(labels[0].keys()) + [
             "verdict", "notes", "seconds_a", "seconds_b", "stages_a", "stages_b", "status_a", "response_a", "status_b", "response_b"])
         writer.writeheader()
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        for i, label in enumerate(labels, 1):
-            fut_a = pool.submit(call, args.a, key, label, args.timeout)
-            fut_b = pool.submit(call, args.b, key, label, args.timeout)
-            a, b = fut_a.result(), fut_b.result()
-            if 401 in (a[0], b[0]):
-                raise SystemExit("Got 401 Unauthorized: the API key doesn't match the running instance(s).")
-            verdict, notes, deltas = compare(a, b, args.tolerance)
-            verdicts[verdict] += 1
-            if deltas:
-                max_deltas[label["label_type"]] = max(max_deltas[label["label_type"]], max(deltas.values()))
-            for side, (status, resp, *_) in (("A", a), ("B", b)):
-                if status == 200 and isinstance(resp, dict):
-                    sources[f"{side}:{resp.get('image_source')}"] += 1
-            if a[0] == b[0] == 200 and isinstance(a[1], dict) and isinstance(b[1], dict):
-                for field in ("api_version", "validator_model_id", "validator_training_date",
-                              "tagger_model_id", "tagger_training_date"):
-                    if a[1].get(field) != b[1].get(field):
-                        version_diffs.add((field, a[1].get(field), b[1].get(field)))
+    # One instance at a time: run together, they compete for the GPU and CPUs and skew the speed check. Alternate which
+    # goes first, since the second read of a panorama comes from the OS's file cache.
+    for i, label in enumerate(labels, 1):
+        if i % 2:
+            a = call(args.a, key, label, args.timeout)
+            b = call(args.b, key, label, args.timeout)
+        else:
+            b = call(args.b, key, label, args.timeout)
+            a = call(args.a, key, label, args.timeout)
+        if 401 in (a[0], b[0]):
+            raise SystemExit("Got 401 Unauthorized: the API key doesn't match the running instance(s).")
+        verdict, notes, deltas = compare(a, b, args.tolerance)
+        verdicts[verdict] += 1
+        if deltas:
+            max_deltas[label["label_type"]] = max(max_deltas[label["label_type"]], max(deltas.values()))
+        for side, (status, resp, *_) in (("A", a), ("B", b)):
+            if status == 200 and isinstance(resp, dict):
+                sources[f"{side}:{resp.get('image_source')}"] += 1
+        if a[0] == b[0] == 200 and isinstance(a[1], dict) and isinstance(b[1], dict):
+            for field in ("api_version", "validator_model_id", "validator_training_date",
+                          "tagger_model_id", "tagger_training_date"):
+                if a[1].get(field) != b[1].get(field):
+                    version_diffs.add((field, a[1].get(field), b[1].get(field)))
 
-            from_google = any(isinstance(r, dict) and r.get("image_source") != "cache"
-                              for s, r, *_ in (a, b) if s == 200)
-            if a[0] == b[0] == 200 and not from_google:
-                times["A"].append(a[2])
-                times["B"].append(b[2])
-                for side, r in (("A", a), ("B", b)):
-                    for stage, secs in r[3].items():
-                        stage_times[side][stage].append(secs)
-                    if any(stage in r[3] for stage in MODEL_STAGES):
-                        model_times[side].append(sum(r[3].get(stage, 0) for stage in MODEL_STAGES))
-            line = (f"[{i}/{len(labels)}] {verdict:5} {label['label_type']:14} label {label['label_id']} "
-                    f"(A {a[2]:.1f}s, B {b[2]:.1f}s){'  [image from Google, not cache]' if from_google else ''}")
-            print(line + ("".join(f"\n      {n}" for n in notes) if verdict != "same" else ""))
-            if writer:
-                writer.writerow({**label, "verdict": verdict, "notes": "; ".join(notes),
-                                 "seconds_a": f"{a[2]:.2f}", "seconds_b": f"{b[2]:.2f}",
-                                 "stages_a": format_stages(a[3]), "stages_b": format_stages(b[3]),
-                                 "status_a": a[0], "response_a": json.dumps(a[1]),
-                                 "status_b": b[0], "response_b": json.dumps(b[1])})
-                out_file.flush()
+        from_google = any(isinstance(r, dict) and r.get("image_source") != "cache"
+                          for s, r, *_ in (a, b) if s == 200)
+        if a[0] == b[0] == 200 and not from_google:
+            times["A"].append(a[2])
+            times["B"].append(b[2])
+            for side, r in (("A", a), ("B", b)):
+                for stage, secs in r[3].items():
+                    stage_times[side][stage].append(secs)
+                if any(stage in r[3] for stage in MODEL_STAGES):
+                    model_times[side].append(sum(r[3].get(stage, 0) for stage in MODEL_STAGES))
+        line = (f"[{i}/{len(labels)}] {verdict:5} {label['label_type']:14} label {label['label_id']} "
+                f"(A {a[2]:.1f}s, B {b[2]:.1f}s){'  [image from Google, not cache]' if from_google else ''}")
+        print(line + ("".join(f"\n      {n}" for n in notes) if verdict != "same" else ""))
+        if writer:
+            writer.writerow({**label, "verdict": verdict, "notes": "; ".join(notes),
+                             "seconds_a": f"{a[2]:.2f}", "seconds_b": f"{b[2]:.2f}",
+                             "stages_a": format_stages(a[3]), "stages_b": format_stages(b[3]),
+                             "status_a": a[0], "response_a": json.dumps(a[1]),
+                             "status_b": b[0], "response_b": json.dumps(b[1])})
+            out_file.flush()
     if out_file:
         out_file.close()
         print(f"\nWrote full responses to {args.out}")
