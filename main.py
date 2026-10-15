@@ -181,7 +181,8 @@ def process():
             "validation_score": validation_confidence,
             "validation_estimated_accuracy": accuracy,
             "validator_model_id": MODEL_MAP["validator_models"][label_type]["model_id"],
-            "validator_training_date": MODEL_MAP["validator_models"][label_type]["training_date"]
+            "validator_training_date": MODEL_MAP["validator_models"][label_type]["training_date"],
+            "validator_revision": MODEL_MAP["validator_models"][label_type]["revision"],
         })
     except Exception as e:
         return jsonify({"error": f"validation error: {str(e)}"}), 500

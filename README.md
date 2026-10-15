@@ -83,7 +83,7 @@ docker tag sidewalk-ai-api:<older-tag> sidewalk-ai-api
 
 ```
 
-Rolling back doesn't affect the validator models, which are downloaded fresh from HuggingFace on every start. Old builds take several GB each; delete ones you don't need with `docker rmi sidewalk-ai-api:<tag>`.
+Each build contains its own copy of every model, so rolling back also rolls back the models. Old builds take several GB each; delete ones you don't need with `docker rmi sidewalk-ai-api:<tag>`.
 
   
 
@@ -95,7 +95,7 @@ curl -X POST -H "Authorization: Bearer $SIDEWALK_AI_API_KEY" -F "label_type=curb
 
 ```
 Please note that x and y are normalized coordinates (between 0 and 1) on the equirectangular image.
->  ```{"api_version":"1.0.1","image_source":"cache","label_type":"curbramp","tag_scores":{"debris / pooled water":1.6009700232189061e-07,"missing tactile warning":0.9999617338180542,"narrow":9.827788744587451e-06,"not enough landing space":1.6410160696977982e-06,"not level with street":5.565861016521012e-08,"points into traffic":1.844670691752981e-06,"steep":4.775402430823306e-06,"surface problem":4.025090305503909e-08},"tagger_model_id":"validated-dino-cls-b-curbramp-tags-best","tagger_training_date":"12-03-2024","tags":["missing tactile warning"],"tags_not_present":["points into traffic","surface problem"],"validation_estimated_accuracy":0.9598393574297188,"validation_result":"correct","validation_score":0.999808132648468,"validator_model_id":"sidewalk-validator-ai-curbramp","validator_training_date":"01-26-2025"} ```
+>  ```{"api_version":"1.0.2","image_source":"cache","label_type":"curbramp","tag_scores":{"debris / pooled water":1.6009700232189061e-07,"missing tactile warning":0.9999617338180542,"narrow":9.827788744587451e-06,"not enough landing space":1.6410160696977982e-06,"not level with street":5.565861016521012e-08,"points into traffic":1.844670691752981e-06,"steep":4.775402430823306e-06,"surface problem":4.025090305503909e-08},"tagger_model_id":"validated-dino-cls-b-curbramp-tags-best","tagger_training_date":"12-03-2024","tags":["missing tactile warning"],"tags_not_present":["points into traffic","surface problem"],"validation_estimated_accuracy":0.9598393574297188,"validation_result":"correct","validation_score":0.999808132648468,"validator_model_id":"sidewalk-validator-ai-curbramp","validator_revision":"969ad5a33079db7885c9e9a4eb5cd0f39d8fe57a","validator_training_date":"08-16-2025"} ```
 
 Please note that `tag_scores` and `tags` will not be returned if the `label_type` does not match the following:
 `["crosswalk", "curbramp", "obstacle", "surfaceproblem"]`
