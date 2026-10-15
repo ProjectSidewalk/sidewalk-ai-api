@@ -160,6 +160,7 @@ def process():
                 "tag_scores": confidence_scores,
                 "tagger_model_id": MODEL_MAP["tagger_models"][label_type]["model_id"],
                 "tagger_training_date": MODEL_MAP["tagger_models"][label_type]["training_date"],
+                "tagger_revision": MODEL_MAP["tagger_models"][label_type]["revision"],
             })
         except Exception as e:
             return jsonify({"error": f"Inference error: {str(e)}"}), 500

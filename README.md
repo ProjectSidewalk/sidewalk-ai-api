@@ -3,7 +3,7 @@
 
   
 
-This serves as an API implementation of the Project Sidewalk AI models for [tagging](https://huggingface.co/projectsidewalk/sidewalk-tagger-ai-models) and [validating](https://huggingface.co/collections/projectsidewalk/project-sidewalk-validator-models-6797bd158d5e385e464dbe45) labels.
+This serves as an API implementation of the Project Sidewalk AI models for tagging ([crosswalk](https://huggingface.co/projectsidewalk/sidewalk-tagger-ai-crosswalk), [curb ramp](https://huggingface.co/projectsidewalk/sidewalk-tagger-ai-curbramp), [obstacle](https://huggingface.co/projectsidewalk/sidewalk-tagger-ai-obstacle), [surface problem](https://huggingface.co/projectsidewalk/sidewalk-tagger-ai-surfaceproblem)) and [validating](https://huggingface.co/collections/projectsidewalk/project-sidewalk-validator-models-6797bd158d5e385e464dbe45) labels.
 
 **This README contains the basic steps for setting up the API, but for a detailed usage guide on using the API, please see [API_USAGE.md](https://github.com/ProjectSidewalk/sidewalk-ai-api/blob/main/docs/API_USAGE.md)**  
 
@@ -34,6 +34,7 @@ git submodule update
 ```bash
 ./download_models.sh
 ```
+This fetches the depth model. The tagger and validator models download from HuggingFace on first start, at the revisions pinned in `sidewalk_ai_api/model_map.py` (the Docker build bakes them into the image).
 
 ## Build
 
@@ -95,7 +96,7 @@ curl -X POST -H "Authorization: Bearer $SIDEWALK_AI_API_KEY" -F "label_type=curb
 
 ```
 Please note that x and y are normalized coordinates (between 0 and 1) on the equirectangular image.
->  ```{"api_version":"1.0.2","image_source":"cache","label_type":"curbramp","tag_scores":{"debris / pooled water":1.6009700232189061e-07,"missing tactile warning":0.9999617338180542,"narrow":9.827788744587451e-06,"not enough landing space":1.6410160696977982e-06,"not level with street":5.565861016521012e-08,"points into traffic":1.844670691752981e-06,"steep":4.775402430823306e-06,"surface problem":4.025090305503909e-08},"tagger_model_id":"validated-dino-cls-b-curbramp-tags-best","tagger_training_date":"12-03-2024","tags":["missing tactile warning"],"tags_not_present":["points into traffic","surface problem"],"validation_estimated_accuracy":0.9598393574297188,"validation_result":"correct","validation_score":0.999808132648468,"validator_model_id":"sidewalk-validator-ai-curbramp","validator_revision":"969ad5a33079db7885c9e9a4eb5cd0f39d8fe57a","validator_training_date":"08-16-2025"} ```
+>  ```{"api_version":"1.0.4","image_source":"cache","label_type":"curbramp","tag_scores":{"debris / pooled water":1.6009700232189061e-07,"missing tactile warning":0.9999617338180542,"narrow":9.827788744587451e-06,"not enough landing space":1.6410160696977982e-06,"not level with street":5.565861016521012e-08,"points into traffic":1.844670691752981e-06,"steep":4.775402430823306e-06,"surface problem":4.025090305503909e-08},"tagger_model_id":"validated-dino-cls-b-curbramp-tags-best","tagger_revision":"cbd3a9632fc594a6f62de850757ae199761d0c4a","tagger_training_date":"12-03-2024","tags":["missing tactile warning"],"tags_not_present":["points into traffic","surface problem"],"validation_estimated_accuracy":0.9598393574297188,"validation_result":"correct","validation_score":0.999808132648468,"validator_model_id":"sidewalk-validator-ai-curbramp","validator_revision":"969ad5a33079db7885c9e9a4eb5cd0f39d8fe57a","validator_training_date":"08-16-2025"} ```
 
 Please note that `tag_scores` and `tags` will not be returned if the `label_type` does not match the following:
 `["crosswalk", "curbramp", "obstacle", "surfaceproblem"]`
