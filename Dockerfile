@@ -5,8 +5,8 @@ WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install wget gcc ffmpeg libsm6 libxext6 -y && rm -rf /var/lib/apt/lists/*
 
-# Dependencies and model checkpoints come before the code, so a code change doesn't redo these multi-GB layers.
-# The base image installs torch into the system Python (Ubuntu marks it externally managed), so install alongside it.
+# Install dependencies and models before copying the code, so code changes don't redo these large steps.
+# --break-system-packages: the base image's torch lives in the system Python, so install next to it.
 COPY requirements.txt download_models.sh ./
 RUN pip install --no-deps --no-cache-dir --break-system-packages -r requirements.txt
 RUN mkdir -p checkpoints && bash download_models.sh

@@ -5,10 +5,8 @@ case "$1" in
   *)   echo "Usage: $0 [dev]" >&2; exit 1 ;;
 esac
 
-# Besides the plain name that docker_start.sh runs, tag each build with the API version, build time, and commit (e.g.
-# sidewalk-ai-api:1.0.1-2026-10-14-1803-fbb1947), so an image the plain name has moved off of still says where it came
-# from. List them with `docker images sidewalk-ai-api`. "-dirty" means the checkout had changed or untracked files,
-# which the build copies in too.
+# Also tag each build with its version, build time, and commit (e.g. sidewalk-ai-api:1.0.1-2026-10-14-1803-fbb1947)
+# so old builds can be told apart for rollback. "-dirty" means uncommitted files went into the image.
 REV=$(git rev-parse --short HEAD)
 [ -z "$(git status --porcelain)" ] || REV="$REV-dirty"
 VERSION_TAG="$(cat API_VERSION)-$(date +%F-%H%M)-$REV"

@@ -25,12 +25,11 @@ logger = logging.getLogger(__name__)
 if not API_KEY:
     logger.warning("SIDEWALK_AI_API_KEY is not set; every request will be rejected with 401.")
 
-# Every model quietly runs on the CPU when torch can't see a GPU (a driver too old for the image's CUDA, a container
-# started without --gpus all), which still answers every request, just many times slower. Refuse to start instead.
-# Exit code 3 is gunicorn's "worker failed to boot", which stops gunicorn rather than respawning the worker forever.
+# Without a GPU every model silently runs on the CPU, many times slower, so refuse to start.
+# Exit code 3 makes gunicorn stop instead of restarting the worker forever.
 if not torch.cuda.is_available() and os.environ.get("SIDEWALK_ALLOW_CPU") != "1":
-    print("CUDA isn't available, so every model would run on the CPU. Check the GPU driver and that the container "
-          "has the GPU (docker run --gpus all), or set SIDEWALK_ALLOW_CPU=1 to run on the CPU.", file=sys.stderr)
+    print("No GPU found. Check the GPU driver and that the container was started with --gpus all, "
+          "or set SIDEWALK_ALLOW_CPU=1 to run on the CPU.", file=sys.stderr)
     sys.exit(3)
 
 app = Flask(__name__)
@@ -59,8 +58,7 @@ def timed(stage):
 
 @app.after_request
 def add_server_timing(response):
-    """Reports per-stage times in milliseconds (e.g. `pano;desc=cache;dur=310, depth;dur=95, ..., total;dur=520`), so a
-    slowdown can be traced to a stage with `curl -i` or the regression check. Kept out of the JSON, which clients use."""
+    """Adds each stage's time to a Server-Timing header, e.g. `pano;desc=cache;dur=310, depth;dur=95, ..., total;dur=520`."""
     if "start" in g:
         stages = []
         for name, secs in g.timings.items():

@@ -23,11 +23,10 @@ Each label is classified as:
 Then a download check sends one label per type to both instances with no city, forcing a download from Google, and
 checks that B succeeds wherever A does (scores aren't compared, since separate downloads can differ).
 
-It also compares speed on the cached labels, failing if B's median is more than --max-slowdown times A's for either the
-whole request or the model stages alone (project, depth, tagger, validator; from the API's Server-Timing header). Most
-of a request is reading the panorama, so the model-stage check is what catches a model silently running on the CPU.
-Both instances must send Server-Timing (API 1.0.1+) for it to pass. The download check's times include Google and
-aren't compared.
+It also compares speed on the cached labels, failing if B's median is more than --max-slowdown times A's, for the whole
+request or for just the model stages (from the API's Server-Timing header). Most of a request is reading the
+panorama, so the model-stage check is what catches a model running on the CPU. Both instances must be API 1.0.1+
+(which added Server-Timing) for it to pass.
 
 Exits 0 only if every label is "same" or DRIFT, B isn't too slow, and the download check passes. A SKIP also fails
 the run, so a broken setup (cache mount, instance down) can't pass by comparing nothing.
@@ -69,8 +68,7 @@ def load_api_key():
 
 
 def parse_server_timing(header):
-    """Turns the API's Server-Timing header ("pano;desc=cache;dur=310, depth;dur=95, ...") into {stage: seconds}.
-    Empty for an instance too old to send it."""
+    """Turns a Server-Timing header ("pano;desc=cache;dur=310, depth;dur=95, ...") into {stage: seconds}."""
     stages = {}
     for entry in (header or "").split(","):
         name, *params = [p.strip() for p in entry.split(";")]
@@ -238,9 +236,9 @@ def main():
     verdicts = Counter()
     max_deltas = defaultdict(float)  # label_type -> largest score change seen
     sources = Counter()
-    times = {"A": [], "B": []}  # Response times on labels both served successfully from the cache.
-    model_times = {"A": [], "B": []}  # Same labels, summed over MODEL_STAGES, when the instance reports them.
-    stage_times = {"A": defaultdict(list), "B": defaultdict(list)}  # Same labels, per stage, from Server-Timing.
+    times = {"A": [], "B": []}  # Request times on labels both served from the cache.
+    model_times = {"A": [], "B": []}  # Same labels, model stages only.
+    stage_times = {"A": defaultdict(list), "B": defaultdict(list)}  # Same labels, per stage.
     version_diffs = set()  # (field, A value, B value) for api_version / model ids that differ
     out_file = open(args.out, "w", newline="") if args.out else None
     writer = None

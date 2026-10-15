@@ -73,7 +73,7 @@ To test changes next to the production instance, build and start with `dev`. Thi
 
 ```
 
-To redeploy prod, pull and run `./docker_build.sh && ./docker_start.sh`; the start script replaces the running container (expect a minute or two of downtime while the models load). Each build is also tagged with the API version, date, and commit it came from, e.g. `sidewalk-ai-api:1.0.1-2026-10-14-1803-5a9487c`, so older images stay identifiable. To roll back, point the plain name at an older build and restart:
+To redeploy prod, pull and run `./docker_build.sh && ./docker_start.sh` (about a minute or two of downtime while the models load). Each build is also tagged with its version, build time, and commit, e.g. `sidewalk-ai-api:1.0.1-2026-10-14-1803-5a9487c`. To roll back to an older build:
 
 ```bash
 
@@ -83,9 +83,7 @@ docker tag sidewalk-ai-api:<older-tag> sidewalk-ai-api
 
 ```
 
-A rollback restores the code and checkpoints but not the validator models, which every start downloads from HuggingFace at their latest version.
-
-Old builds aren't deleted automatically, and each one takes several GB. Remove ones you no longer need with `docker rmi sidewalk-ai-api:<tag>`.
+Rolling back doesn't affect the validator models, which are downloaded fresh from HuggingFace on every start. Old builds take several GB each; delete ones you don't need with `docker rmi sidewalk-ai-api:<tag>`.
 
   
 

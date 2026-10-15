@@ -14,11 +14,9 @@ HEADERS = {
     "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
 }
 
-# One session for every tile fetch, so tiles reuse connections to Google instead of each paying for a new TLS
-# handshake, which is slow under the base image's OpenSSL 3.0. The pool fits the 100 fetch threads. Cookies are
-# blocked so requests go out exactly as they did with a fresh requests.get per tile. Pooled connections can go stale
-# between cache misses, so a failed connection is retried once, and the timeout (connect, read) keeps a dead one from
-# hanging the request until gunicorn kills the worker. Anything worse is left to the panorama cache.
+# Share one session across tile fetches so connections get reused (opening a new one per tile was ~2x slower).
+# Cookies are blocked so requests look the same as before. Idle connections can go dead between downloads, so retry
+# once and time out instead of hanging until gunicorn kills the worker.
 SESSION = requests.Session()
 SESSION.mount("https://", requests.adapters.HTTPAdapter(pool_connections=1, pool_maxsize=100, max_retries=1))
 TILE_TIMEOUT = (5, 10)

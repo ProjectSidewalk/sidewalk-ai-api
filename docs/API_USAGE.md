@@ -57,7 +57,7 @@ The API returns a JSON object containing the results of the analysis.
 
 ##### Timing header
 
-Every response to an authenticated request includes a `Server-Timing` header with how long each stage took, in milliseconds, e.g. `pano;desc=cache;dur=310, project;dur=40, depth;dur=95, tagger;dur=30, validator;dur=45, total;dur=530`. Stages that didn't run are left out. It's meant for debugging speed (`curl -i` shows it) and isn't part of the JSON.
+Responses also include a `Server-Timing` header with how long each step took in milliseconds, e.g. `pano;desc=cache;dur=310, depth;dur=95, ..., total;dur=530`. It's for debugging speed (`curl -i` shows it).
 
 #### Notes
 
