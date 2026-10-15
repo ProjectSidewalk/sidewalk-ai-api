@@ -2,19 +2,27 @@ MODEL_MAP = {
     "tagger_models": {
         "crosswalk": {
             "model_id": "validated-dino-cls-b-crosswalk-tags-best",
-            "training_date": "12-03-2024"
+            "training_date": "12-03-2024",
+            "repo": "sidewalk-tagger-ai-models",
+            "revision": "65959dbc80b87e4f39385204c4b639cbcf58e1a8"
         },
         "curbramp": {
             "model_id": "validated-dino-cls-b-curbramp-tags-best",
-            "training_date": "12-03-2024"
+            "training_date": "12-03-2024",
+            "repo": "sidewalk-tagger-ai-models",
+            "revision": "65959dbc80b87e4f39385204c4b639cbcf58e1a8"
         },
         "obstacle": {
             "model_id": "validated-dino-cls-b-obstacle-tags-best",
-            "training_date": "12-03-2024"
+            "training_date": "12-03-2024",
+            "repo": "sidewalk-tagger-ai-models",
+            "revision": "65959dbc80b87e4f39385204c4b639cbcf58e1a8"
         },
         "surfaceproblem": {
             "model_id": "validated-dino-cls-b-surfaceproblem-tags-best",
-            "training_date": "12-03-2024"
+            "training_date": "12-03-2024",
+            "repo": "sidewalk-tagger-ai-models",
+            "revision": "65959dbc80b87e4f39385204c4b639cbcf58e1a8"
         }
     },
     "validator_models": {

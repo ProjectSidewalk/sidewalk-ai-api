@@ -5,7 +5,9 @@ from PIL import Image
 from torch import nn
 from torchvision import transforms
 from copy import deepcopy
+from huggingface_hub import hf_hub_download
 from dinov2.models.vision_transformer import vit_base
+from sidewalk_ai_api.model_map import MODEL_MAP
 
 
 # Resizes to target_size then pads to the nearest multiple so patch_size=14 divides evenly.
@@ -52,7 +54,6 @@ class ImageTagger:
     def __init__(self, label_type: str):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.label_type = label_type
-        self.model_prefix = "dino"
         self.image_dimension = 256
         self.img_resize_multiple = 14
         self.target_size = (self.image_dimension, self.image_dimension)
@@ -69,7 +70,10 @@ class ImageTagger:
 
         # Initialize model
         self.classifier = DinoVisionTransformerClassifier("base", nc)
-        model_path = f"checkpoints/validated-{self.model_prefix}-cls-b-{label_type}-tags-best.pth"
+        # Pin the repo commit so every instance serves the same weights, even if the repo is updated.
+        entry = MODEL_MAP["tagger_models"][label_type]
+        model_path = hf_hub_download(f"projectsidewalk/{entry['repo']}", f"{entry['model_id']}.pth",
+                                     revision=entry["revision"])
         model_load = torch.load(model_path, map_location=self.device)
         if 'model_state_dict' in model_load:
             self.classifier.load_state_dict(model_load['model_state_dict'])
