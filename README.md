@@ -73,6 +73,18 @@ To test changes next to the production instance, build and start with `dev`. Thi
 
 ```
 
+To redeploy prod, pull and run `./docker_build.sh && ./docker_start.sh`; the start script replaces the running container (expect a minute or two of downtime while the models load). Each build is also tagged with the API version, date, and commit it came from, e.g. `sidewalk-ai-api:1.0.1-2026-10-14-fbb1947`, so older images stay identifiable. To roll back, point the plain name at an older build and restart:
+
+```bash
+
+docker images sidewalk-ai-api                              # list builds, newest first
+docker tag sidewalk-ai-api:<older-tag> sidewalk-ai-api
+./docker_start.sh
+
+```
+
+Old builds aren't deleted automatically, and each one takes several GB. Remove ones you no longer need with `docker rmi sidewalk-ai-api:<tag>`.
+
   
 
 ## Try an example

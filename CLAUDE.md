@@ -18,7 +18,7 @@ git submodule init && git submodule update
 Build and run via Docker (GPU required — needs CUDA + nvidia-container-toolkit, ~9–10 GB VRAM per instance):
 
 ```bash
-./docker_build.sh       # builds the sidewalk-ai-api image
+./docker_build.sh       # builds sidewalk-ai-api, also tagged <API_VERSION>-<date>-<commit> for rollback
 ./docker_start.sh       # runs it as container sidewalk-ai-api on 127.0.0.1:60654 → 5000, restart unless-stopped
 ./docker_build.sh dev && ./docker_start.sh dev   # test instance alongside prod: sidewalk-ai-api-dev on 127.0.0.1:60655
 ```
