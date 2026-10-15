@@ -11,18 +11,18 @@ PANOS_DIR=/m-makeabilitylab/makeabilitylab/sidewalk_panos/Panoramas
 # Pass "dev" to run a test instance alongside prod: the dev image (from `./docker_build.sh dev`) on port 60655, named so
 # it's easy to remove (`docker rm -f sidewalk-ai-api-dev`), and not restarted on reboot. It needs ~9-10 GB of VRAM on
 # top of prod's. Reach it from another machine with `ssh -L 60655:127.0.0.1:60655 <server>`.
-# Starting dev again replaces the running dev container.
+# The container is named after its image, and starting either one again replaces the running container of that name.
 case "$1" in
   "")
     IMAGE=sidewalk-ai-api; PORT=60654; RUN_OPTS="--restart unless-stopped" ;;
   dev)
-    IMAGE=sidewalk-ai-api-dev; PORT=60655; RUN_OPTS="--name sidewalk-ai-api-dev"
-    docker rm -f sidewalk-ai-api-dev 2>/dev/null ;;
+    IMAGE=sidewalk-ai-api-dev; PORT=60655; RUN_OPTS="" ;;
   *)
     echo "Usage: $0 [dev]" >&2; exit 1 ;;
 esac
 
-docker run --gpus all --runtime nvidia -d -p 127.0.0.1:$PORT:5000 $RUN_OPTS \
+docker rm -f $IMAGE 2>/dev/null
+docker run --gpus all --runtime nvidia -d -p 127.0.0.1:$PORT:5000 --name $IMAGE $RUN_OPTS \
       -e SIDEWALK_AI_API_KEY \
       -e SIDEWALK_SCRAPES_DIR=$PANOS_DIR \
       -v $PANOS_DIR:$PANOS_DIR:ro \

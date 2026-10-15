@@ -19,11 +19,11 @@ Build and run via Docker (GPU required — needs CUDA + nvidia-container-toolkit
 
 ```bash
 ./docker_build.sh       # builds the sidewalk-ai-api image
-./docker_start.sh       # runs it on 127.0.0.1:60654 → container 5000, restart unless-stopped
+./docker_start.sh       # runs it as container sidewalk-ai-api on 127.0.0.1:60654 → 5000, restart unless-stopped
 ./docker_build.sh dev && ./docker_start.sh dev   # test instance alongside prod: sidewalk-ai-api-dev on 127.0.0.1:60655
 ```
 
-`docker_start.sh` sources `SIDEWALK_AI_API_KEY` from `~/.sidewalk-ai-api.env` (refuses to start without it), and mounts the lab's panorama cache read-only, setting `SIDEWALK_SCRAPES_DIR` to the same path. Ports are bound to loopback only; on the server, an https reverse proxy fronts prod. To reach the dev instance from another machine, use an SSH tunnel (`ssh -L 60655:127.0.0.1:60655 <server>`). The container runs `ignition.sh` (gunicorn, 1 worker, 120 s timeout).
+Starting either instance replaces the running container of the same name, so `./docker_start.sh` is also the redeploy step. `docker_start.sh` sources `SIDEWALK_AI_API_KEY` from `~/.sidewalk-ai-api.env` (refuses to start without it), and mounts the lab's panorama cache read-only, setting `SIDEWALK_SCRAPES_DIR` to the same path. Ports are bound to loopback only; on the server, an https reverse proxy fronts prod. To reach the dev instance from another machine, use an SSH tunnel (`ssh -L 60655:127.0.0.1:60655 <server>`). The container runs `ignition.sh` (gunicorn, 1 worker, 120 s timeout).
 
 Run locally without Docker (requires CUDA, the submodule, and downloaded checkpoints):
 
