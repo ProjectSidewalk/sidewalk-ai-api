@@ -83,6 +83,8 @@ feature the person clicked is at the centre of the view.
   rounding them).
 - `x = 1.0` is the same column as `x = 0.0` (the panorama wraps).
 - `camera_pitch=0` with no (or zero) roll, or `tilt_beta=0`, is no rotation: `tilt_applied: false`, `tilt_beta: null`.
+- A `camera_roll` without a `camera_pitch` is not applied: the API corrects only when the pitch is known. (The
+  geometry package itself would apply a roll-only tilt, but no Street View label carries a roll today.)
 - `coord_frame=rig` never corrects, even with `camera_pitch` given (`tilt_applied: false`).
 
 ##### Timing header
@@ -104,7 +106,7 @@ Errors return a JSON object with an `error` message.
 
 | Code  | When                                                                                          |
 | :---- | :-------------------------------------------------------------------------------------------- |
-| `400` | A required parameter is missing, `x`/`y` is outside 0–1, `label_type` isn't supported, or a pose field is invalid (`camera_pitch`/`camera_roll` not a number, infinite or beyond ±30, `tilt_beta` outside 0–1.5, or `coord_frame` not `level`/`rig`). |
+| `400` | A required parameter is missing, `x`/`y` is outside 0–1, `label_type` isn't supported, or a pose field is invalid (`camera_pitch`/`camera_roll` not a number, infinite or beyond ±30, `tilt_beta` not a number, `NaN`, infinite or outside 0–1.5, or `coord_frame` not `level`/`rig`). |
 | `401` | The API key is missing or wrong.                                                               |
 | `500` | Model inference failed.                                                                        |
 | `502` | The panorama couldn't be loaded from the cache or downloaded from Google (e.g. it no longer exists). |

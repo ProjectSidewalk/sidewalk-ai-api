@@ -135,7 +135,7 @@ def parse_float(name, default=None, nan_is_none=False, lo=None, hi=None, require
     Absent or empty gives `default` (or InvalidField if `required`); NaN gives None when `nan_is_none` (a NULL
     database column, "unknown"); anything else that isn't a finite number in range raises InvalidField.
 
-    Example: parse_float("camera_pitch", nan_is_none=True, lo=-90, hi=90) -> 3.0, or None when absent.
+    Example: parse_float("camera_pitch", nan_is_none=True, lo=-30, hi=30) -> 3.0, or None when absent.
     """
     raw = request.form.get(name, "").strip()
     if not raw:

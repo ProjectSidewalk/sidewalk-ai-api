@@ -43,9 +43,10 @@ def render_view_torch(equi_img, view, tilt=None):
     the package's ``sample_bilinear`` does.
 
     Anti-aliasing follows the package's ``render_view``: when ``k = view.reduction_factor(W)`` is above 1 the pano
-    is box-reduced k-fold first (``avg_pool2d``, rounded back to whole levels as the package's ``box_reduce`` does)
-    and sampled at the source coordinates divided by k. For the 8192 px pano and 2048 px 90 degree view /process
-    uses, k = 1 and nothing is reduced.
+    is box-reduced k-fold first (``avg_pool2d``, kept in float so there is a single rounding at the end) and
+    ``normalized_grid_torch(..., k=k)`` rescales the full-resolution grid onto the reduced pano, with the wrap period
+    the reduced width (the package's docs/geometry.md recipe). For the 8192 px pano and 2048 px 90 degree view
+    /process uses, k = 1 and nothing is reduced.
 
     Args:
         equi_img (numpy.ndarray): (H, W, 3) uint8 equirectangular image (rig frame).
@@ -66,11 +67,10 @@ def render_view_torch(equi_img, view, tilt=None):
     sx, sy = sampling_grid_torch(view, tilt, w, h, device=device)
     k = view.reduction_factor(w)
     if k > 1:
-        img = F.avg_pool2d(img.float(), kernel_size=k, stride=k).round()
-        sx, sy, w, h = sx / k, sy / k, w // k, h // k
+        img = F.avg_pool2d(img.float(), kernel_size=k, stride=k)
     # Pad while still uint8 at k = 1, so a request holds one full-size float pano, not two.
     img = wrap_pad_torch(img).float()
-    grid = normalized_grid_torch(sx, sy, w, h)
+    grid = normalized_grid_torch(sx, sy, w, h, k=k)
     persp = F.grid_sample(img, grid, mode="bilinear", padding_mode="border", align_corners=False)
     return persp[0].permute(1, 2, 0).round().clamp(0, 255).byte().cpu().numpy()
 

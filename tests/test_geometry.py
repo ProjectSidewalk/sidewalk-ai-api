@@ -92,11 +92,15 @@ def test_torch_matches_package_full_size():
 
 
 def test_torch_matches_package_with_antialiasing():
-    """k = 2 (a 16384-wide pano, a 2048 px 90 degree view): both box-reduce before sampling."""
+    """k = 2 (a 16384-wide pano, a 2048 px 90 degree view): both box-reduce before sampling and round once.
+    float32 vs float64 leaves ~0.7% of values one level apart; rounding the pooled pano too (a second rounding)
+    or skipping the reduction moves far more."""
     pano = structured_pano(16384)
     view, tilt = label_view(0.9995, 0.55, 90, 2048, camera_pitch=3.0, beta=0.95)
     assert view.reduction_factor(16384) == 2
-    assert np.abs(render_view_torch(pano, view, tilt).astype(int) - render_view(pano, view, tilt)).max() <= 1
+    diff = np.abs(render_view_torch(pano, view, tilt).astype(int) - render_view(pano, view, tilt))
+    assert diff.max() <= 1
+    assert (diff != 0).mean() < 0.02
 
 
 def old_rays_in_new_view(pano, x, y):
