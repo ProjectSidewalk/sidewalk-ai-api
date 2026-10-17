@@ -28,21 +28,19 @@ from PIL import Image
 import cv2
 import torch
 import torch.nn.functional as F
-from sidewalk_panorama_tools.geometry import sampling_grid
+from sidewalk_panorama_tools.torch_geometry import normalized_grid_torch, sampling_grid_torch, wrap_pad_torch
 
 def render_view_torch(equi_img, view, tilt=None):
     """Renders ``view`` of an equirectangular image on the GPU, with the geometry of the shared package.
 
-    The source pixel of every output pixel comes from ``sidewalk_panorama_tools.geometry.sampling_grid``, the
-    same function the training pipeline renders its crops with (``render_view``), so the two views are the
-    same up to float32 rounding in ``grid_sample``. Only the bilinear sampling runs in torch.
+    The source pixel of every output pixel comes from ``sidewalk_panorama_tools.torch_geometry.sampling_grid_torch``,
+    the torch twin of the ``sampling_grid`` the training pipeline renders its crops with (``render_view``), built on
+    the same device as the image. Only the ``grid_sample`` call and the rounding are this API's.
 
-    Conventions (the package's): source pixel *i*'s centre is at ``i + 0.5`` and x wraps at the seam. With
-    ``align_corners=False``, grid_sample maps a normalized ``g`` to the continuous pixel ``(g + 1) / 2 * size``
-    with the same centre = i + 0.5 convention, so ``g = 2 * s / size - 1`` and no half-pixel shift is needed.
-    grid_sample does not wrap, so the image is padded with one wrapped column on each side (pixel 0 of the
-    padded image is column W - 1) and x is shifted by 1; ``padding_mode="border"`` then only clamps y at the
-    poles, which is what the package's ``sample_bilinear`` does.
+    Conventions (the package's): source pixel *i*'s centre is at ``i + 0.5`` and x wraps at the seam.
+    ``wrap_pad_torch`` pads one wrapped column on each side and ``normalized_grid_torch`` maps the grid onto that
+    padded image for ``align_corners=False``, so ``padding_mode="border"`` only clamps y at the poles, which is what
+    the package's ``sample_bilinear`` does.
 
     No anti-aliasing: the package's ``render_view`` box-reduces the pano by ``view.reduction_factor(W)`` first, and
     that factor is 1 for the 8192 px pano and 2048 px 90 degree view /process uses (tests/test_geometry.py asserts
@@ -63,16 +61,10 @@ def render_view_torch(equi_img, view, tilt=None):
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     h, w = equi_img.shape[:2]
-    sx, sy = sampling_grid(view, tilt, w, h)
-
     img = torch.from_numpy(np.ascontiguousarray(equi_img)).to(device).permute(2, 0, 1).unsqueeze(0).float()
-    img = torch.cat((img[..., -1:], img, img[..., :1]), dim=3)  # wrap one column each side for the seam
-
-    gx = torch.from_numpy(2.0 * (sx + 1.0) / (w + 2) - 1.0)
-    gy = torch.from_numpy(2.0 * sy / h - 1.0)
-    grid = torch.stack((gx, gy), dim=-1).unsqueeze(0).to(device=device, dtype=torch.float32)
-
-    persp = F.grid_sample(img, grid, mode="bilinear", padding_mode="border", align_corners=False)
+    sx, sy = sampling_grid_torch(view, tilt, w, h, device=device)
+    grid = normalized_grid_torch(sx, sy, w, h)
+    persp = F.grid_sample(wrap_pad_torch(img), grid, mode="bilinear", padding_mode="border", align_corners=False)
     return persp[0].permute(1, 2, 0).round().clamp(0, 255).byte().cpu().numpy()
 
 

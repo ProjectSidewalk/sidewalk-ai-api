@@ -14,11 +14,25 @@
 
 import numpy as np
 import pytest
+import torch
+import torch.nn.functional as F
 from sidewalk_panorama_tools.geometry import (label_view, pano_px_to_lonlat, project_lonlat, render_view,
                                               sampling_grid)
 
 from _old_renderer import old_view
 from sidewalk_ai_api.panorama import render_view_torch
+
+
+def render_numpy_grid(pano, view, tilt):
+    """The pre-torch-grid path: the numpy sampling_grid with the same normalization, padding and sampling."""
+    h, w = pano.shape[:2]
+    sx, sy = sampling_grid(view, tilt, w, h)
+    img = torch.from_numpy(pano).permute(2, 0, 1).unsqueeze(0).float()
+    img = torch.cat((img[..., -1:], img, img[..., :1]), dim=3)
+    grid = torch.stack((torch.from_numpy(2.0 * (sx + 1.0) / (w + 2) - 1.0),
+                        torch.from_numpy(2.0 * sy / h - 1.0)), dim=-1).unsqueeze(0).float()
+    out = F.grid_sample(img, grid, mode="bilinear", padding_mode="border", align_corners=False)
+    return out[0].permute(1, 2, 0).round().clamp(0, 255).byte().numpy()
 
 # (x_norm, y_norm): centre, both sides of the seam, high and low latitudes.
 POINTS = [(0.5, 0.5), (0.001, 0.6), (0.9995, 0.4), (0.25, 0.1), (0.75, 0.9), (0.3, 0.02), (0.6, 0.98)]
@@ -45,6 +59,18 @@ def test_torch_matches_package(pano_1024, x, y, pitch):
     ref = render_view(pano_1024, view, tilt).astype(int)
     assert ours.shape == ref.shape == (256, 256, 3)
     assert np.abs(ours - ref).max() <= 1
+
+
+@pytest.mark.parametrize("x, y", POINTS)
+def test_torch_grid_matches_numpy_grid(pano_1024, x, y):
+    """At k = 1 the torch-built grid renders the same image as the numpy grid, except where the float32 grid tips
+    a value across a rounding boundary: one level, on ~0.03% of values here (0.2% at 8192 -> 2048)."""
+    view, tilt = label_view(x, y, 90, 256, camera_pitch=3.0, camera_roll=1.0, beta=0.95)
+    assert view.reduction_factor(1024) == 1
+    a = render_view_torch(pano_1024, view, tilt).astype(int)
+    b = render_numpy_grid(pano_1024, view, tilt).astype(int)
+    assert np.abs(a - b).max() <= 1
+    assert (a != b).mean() < 0.005
 
 
 def test_torch_matches_package_full_size():
