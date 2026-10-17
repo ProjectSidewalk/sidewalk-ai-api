@@ -32,6 +32,10 @@ The following parameters are sent in the body of the request.
 | `x`           | Float     | Yes      | The horizontal coordinate of the label on the equirectangular panorama. This value **must be normalized** to be between 0 and 1, where `0.0` represents the far-left edge and `1.0` represents the far-right edge. To calculate, use: `pixel_x / image_width`. |
 | `y`           | Float     | Yes      | The vertical coordinate of the label on the equirectangular panorama. This value **must be normalized** to be between 0 and 1, where `0.0` represents the top edge and `1.0` represents the bottom edge. To calculate, use: `pixel_y / image_height`. |
 | `city`        | String    | No       | The Project Sidewalk city id (e.g. `chicago-il`). When given, the API first looks for the panorama in the lab's local panorama cache for that city, and only downloads it from Google if it isn't there. |
+| `camera_pitch` | Float    | No       | The panorama camera's pitch in degrees (the label's `camera_pitch`), between -90 and 90. Absent, empty or `NaN` means unknown, and then no tilt correction is made. See [Camera pose and tilt correction](#camera-pose-and-tilt-correction). |
+| `camera_roll`  | Float    | No       | The panorama camera's roll in degrees, between -90 and 90. Absent, empty or `NaN` counts as 0. Used only together with `camera_pitch`. |
+| `tilt_beta`    | Float    | No       | The fraction of the camera's tilt to correct for, between 0 and 1.5. Default `0.95`, measured for the pose the website stores. |
+| `coord_frame`  | String   | No       | `level` (default) or `rig`: which frame `x` and `y` are in. `level` is a label placed by a person in the Project Sidewalk viewer; `rig` means `x`/`y` already point at a pixel of the panorama image (e.g. a label from the AI labeler), and they are never corrected. |
 
 #### Response
 
@@ -43,6 +47,9 @@ The API returns a JSON object containing the results of the analysis.
 | :---------------------------- | :--------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `label_type`                  | String           | The `label_type` that was processed, echoing the value provided in the request.                                                                                              |
 | `image_source`                | String           | Where the panorama came from: `"cache"` (the local panorama cache) or `"download"` (Google Street View).                                                                    |
+| `tilt_applied`                | Boolean          | `true` when the view was corrected for the camera's tilt: `coord_frame` is `level` and `camera_pitch` was given. |
+| `tilt_beta`                   | Float or null    | The `tilt_beta` used when `tilt_applied` is `true`, otherwise `null`. |
+| `coord_frame`                 | String           | The `coord_frame` the request was read in: `"level"` or `"rig"`. |
 | `api_version`                 | String           | The version of this API that produced the response.                                                                                                                          |
 | `tag_scores`                  | JSON Object      | An object where each key is a potential problem tag (e.g., `missing tactile warning`, `steep`) and its value is the model's confidence score for that tag being present. Includes every tag for the label type, even ones the API never recommends. |
 | `tags`                        | Array of Strings | Tags the model is confident are present. Each tag has its own threshold (in `tag_thresholds.json`), and a tag is listed when its score is at or above it. Some tags are never recommended as present. |
@@ -56,6 +63,25 @@ The API returns a JSON object containing the results of the analysis.
 | `validator_model_id`                        | String | The HuggingFace model id for the validator model used to make the prediction.                                                 |
 | `validator_training_date`                        | String | A standard MM-DD-YYYY date indicating when the validator model was trained.                                                 |
 | `validator_revision`                        | String | The HuggingFace commit of the validator model, which identifies its exact weights.                                                 |
+
+##### Camera pose and tilt correction
+
+The API looks at each label through a 90° perspective view (2048×2048 px) aimed at `x`/`y`, rendered by the
+shared geometry package [sidewalk-panorama-tools](https://github.com/ProjectSidewalk/sidewalk-panorama-tools)
+(`sidewalk_panorama_tools.geometry.label_view`), the same code the validator's training crops are made with.
+
+A label placed by a person is stored in the viewer's gravity-levelled frame, but the panorama image is in the
+camera rig's frame, which is tilted by the car's pitch and roll. So a stored point sits off its feature by about
+`tilt_beta × (camera_pitch × cos b + camera_roll × sin b)` degrees of elevation, where `b` is the label's bearing in
+the panorama. With `camera_pitch` given and `coord_frame=level`, the API rotates the view by that tilt, so the
+feature the person clicked is at the centre of the view.
+
+- **A request without `camera_pitch` gets no tilt correction**, whatever `camera_roll`, `tilt_beta` and
+  `coord_frame` say. It is the same view as API 1.0.x up to sub-pixel rounding: 1.1.0 renders it with the shared
+  package, which differs from the old renderer by under ~1 px at the label (the old one read the source image about
+  one row low). The regression check (`regression/compare.py`) is how that is confirmed on real labels.
+- `camera_pitch=0` with no roll, or `tilt_beta=0`, still reports `tilt_applied: true`, but the rotation is zero.
+- `coord_frame=rig` never corrects, even with `camera_pitch` given (`tilt_applied: false`).
 
 ##### Timing header
 
@@ -76,7 +102,7 @@ Errors return a JSON object with an `error` message.
 
 | Code  | When                                                                                          |
 | :---- | :-------------------------------------------------------------------------------------------- |
-| `400` | A required parameter is missing, `x`/`y` is outside 0–1, or `label_type` isn't supported.     |
+| `400` | A required parameter is missing, `x`/`y` is outside 0–1, `label_type` isn't supported, or a pose field is invalid (`camera_pitch`/`camera_roll` not a number, infinite or beyond ±90, `tilt_beta` outside 0–1.5, or `coord_frame` not `level`/`rig`). |
 | `401` | The API key is missing or wrong.                                                               |
 | `500` | Model inference failed.                                                                        |
 | `502` | The panorama couldn't be loaded from the cache or downloaded from Google (e.g. it no longer exists). |
