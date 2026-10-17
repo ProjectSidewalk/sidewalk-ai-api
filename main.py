@@ -1,11 +1,9 @@
 from contextlib import contextmanager
 from flask import Flask, g, request, jsonify
-from sidewalk_ai_api.tagger import ImageTagger
-from sidewalk_ai_api.validator import ImageValidator
 from PIL import Image
 from sidewalk_ai_api.panorama import Panorama
-from sidewalk_ai_api.depthanything import DepthAnythingPredictor
 from sidewalk_ai_api.model_map import MODEL_MAP
+from sidewalk_panorama_tools.geometry import label_view
 import cv2
 import hmac
 import json
@@ -69,18 +67,86 @@ def add_server_timing(response):
     return response
 
 
-depthanything = DepthAnythingPredictor()
-
 TAGGER_LABEL_TYPES = ["crosswalk", "curbramp", "obstacle", "surfaceproblem"]
-taggers = {label_type: ImageTagger(label_type=label_type) for label_type in TAGGER_LABEL_TYPES}
-
 VALIDATOR_LABEL_TYPES = ["crosswalk", "curbramp", "obstacle", "surfaceproblem", "nocurbramp"]
-validators = {label_type: ImageValidator(label_type=label_type) for label_type in VALIDATOR_LABEL_TYPES}
+
+# The models load once, here at import, and stay on the GPU. SIDEWALK_TEST_STUBS=1 skips loading them (and their
+# imports, which need the Depth-Anything-V2 submodule, transformers and the checkpoints) so the tests in tests/ can
+# import the app on a machine without any of those and put stand-ins in these three names. Never set it in production.
+if os.environ.get("SIDEWALK_TEST_STUBS") == "1":
+    depthanything, taggers, validators = None, {}, {}
+else:
+    from sidewalk_ai_api.tagger import ImageTagger
+    from sidewalk_ai_api.validator import ImageValidator
+    from sidewalk_ai_api.depthanything import DepthAnythingPredictor
+    depthanything = DepthAnythingPredictor()
+    taggers = {label_type: ImageTagger(label_type=label_type) for label_type in TAGGER_LABEL_TYPES}
+    validators = {label_type: ImageValidator(label_type=label_type) for label_type in VALIDATOR_LABEL_TYPES}
 accuracy_mappings = {label_type: json.load(open(f"accuracy_mappings/{label_type}.json"))
                  for label_type in VALIDATOR_LABEL_TYPES}
 
 with open('API_VERSION', 'r') as file:
     API_VERSION = file.read().strip()
+
+# Rig-tilt correction (docs/API_USAGE.md, "Camera pose and tilt correction"). The default beta is the fraction of the
+# rig tilt measured to leak into a stored label point for the pose record the website sends (sidewalk-panorama-tools
+# #191); it differs from the package's own default (0.9, for the database's camera_pitch column), so it is set here.
+DEFAULT_TILT_BETA = 0.95
+MAX_POSE_DEG = 90.0
+MAX_TILT_BETA = 1.5
+COORD_FRAMES = ("level", "rig")
+
+
+class BadRequest(ValueError):
+    """A request field that fails validation; its message is returned with a 400."""
+
+
+def optional_float(name):
+    """The form field `name` as a float, or None when it is absent, empty or NaN. Raises BadRequest for any other
+    value that isn't a finite number."""
+    raw = request.form.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        raise BadRequest(f"{name} must be a number")
+    if math.isnan(value):
+        return None
+    if not math.isfinite(value):
+        raise BadRequest(f"{name} must be finite")
+    return value
+
+
+def parse_tilt_fields():
+    """Reads the optional pose fields. -> (camera_pitch, camera_roll, tilt_beta, coord_frame, tilt_applied).
+
+    The tilt is applied iff coord_frame is "level" and camera_pitch is known (a missing roll counts as 0). "rig" means
+    x and y already point at image pixels (e.g. the AI labeler's own labels), so they are never corrected.
+
+    Example: camera_pitch=3, coord_frame absent -> (3.0, None, 0.95, "level", True).
+    """
+    camera_pitch = optional_float("camera_pitch")
+    camera_roll = optional_float("camera_roll")
+    for name, value in (("camera_pitch", camera_pitch), ("camera_roll", camera_roll)):
+        if value is not None and abs(value) > MAX_POSE_DEG:
+            raise BadRequest(f"{name} must be between -{MAX_POSE_DEG:g} and {MAX_POSE_DEG:g} degrees")
+
+    raw_beta = request.form.get("tilt_beta", "").strip()
+    try:
+        tilt_beta = float(raw_beta) if raw_beta else DEFAULT_TILT_BETA
+    except ValueError:
+        raise BadRequest("tilt_beta must be a number")
+    if not (math.isfinite(tilt_beta) and 0 <= tilt_beta <= MAX_TILT_BETA):
+        raise BadRequest(f"tilt_beta must be between 0 and {MAX_TILT_BETA:g}")
+
+    coord_frame = request.form.get("coord_frame", "").strip() or "level"
+    if coord_frame not in COORD_FRAMES:
+        raise BadRequest(f"coord_frame must be one of {list(COORD_FRAMES)}")
+
+    tilt_applied = coord_frame == "level" and camera_pitch is not None
+    return camera_pitch, camera_roll, tilt_beta, coord_frame, tilt_applied
+
 
 @app.route("/process", methods=["POST"])
 def process():
@@ -105,6 +171,11 @@ def process():
     if label_type not in VALIDATOR_LABEL_TYPES:
         return jsonify({"error": f"Invalid label_type. Choose from {VALIDATOR_LABEL_TYPES}"}), 400
 
+    try:
+        camera_pitch, camera_roll, tilt_beta, coord_frame, tilt_applied = parse_tilt_fields()
+    except BadRequest as e:
+        return jsonify({"error": str(e)}), 400
+
     panorama_id = request.form["panorama_id"]
     city = request.form.get("city")
 
@@ -119,8 +190,13 @@ def process():
         return jsonify({"error": f"Failed to fetch panorama"}), 502
     with timed("project"):
         height, width = panorama.panorama_image.shape[:2]
-        theta, phi = panorama.get_perspective_center_params(label_x * width, label_y * height)
-        perspective_image = panorama.to_perspective_image(90, theta, phi, width // 4, width // 4)
+        # The shared geometry (sidewalk-panorama-tools): a 90 degree view aimed at the label, 2048 px for the 8192 px
+        # pano, with the rig-tilt rotation when tilt_applied (otherwise no rotation at all).
+        if tilt_applied:
+            view, tilt = label_view(label_x, label_y, 90, width // 4, camera_pitch, camera_roll, tilt_beta)
+        else:
+            view, tilt = label_view(label_x, label_y, 90, width // 4)
+        perspective_image = panorama.to_perspective_image(view, tilt)
 
     with timed("depth"):
         depth = depthanything.predict_depth(perspective_image)
@@ -146,7 +222,13 @@ def process():
     perspective_image = cv2.cvtColor(perspective_image, cv2.COLOR_BGR2RGB)
     perspective_image = Image.fromarray(perspective_image)
 
-    response = {"label_type": label_type, "image_source": panorama.image_source}
+    response = {
+        "label_type": label_type,
+        "image_source": panorama.image_source,
+        "tilt_applied": tilt_applied,
+        "tilt_beta": tilt_beta if tilt_applied else None,
+        "coord_frame": coord_frame,
+    }
 
     # Perform tagging inference only if label_type is in TAGGER_LABEL_TYPES
     if label_type in TAGGER_LABEL_TYPES:
