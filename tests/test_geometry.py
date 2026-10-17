@@ -40,6 +40,7 @@ def pano_1024():
 @pytest.mark.parametrize("pitch", [None, 3.0])
 def test_torch_matches_package(pano_1024, x, y, pitch):
     view, tilt = label_view(x, y, 90, 256, camera_pitch=pitch, camera_roll=1.0 if pitch else None, beta=0.95)
+    assert view.reduction_factor(1024) == 1
     ours = render_view_torch(pano_1024, view, tilt).astype(int)
     ref = render_view(pano_1024, view, tilt).astype(int)
     assert ours.shape == ref.shape == (256, 256, 3)
@@ -50,6 +51,8 @@ def test_torch_matches_package_full_size():
     """The production size: an 8192 x 4096 pano and a 2048 view, at the seam."""
     pano = structured_pano(8192)
     view, tilt = label_view(0.9995, 0.55, 90, 2048, camera_pitch=3.0, beta=0.95)
+    # The package anti-aliases by box-reducing k-fold first; render_view_torch doesn't, which is only right at k = 1.
+    assert view.reduction_factor(8192) == 1
     assert np.abs(render_view_torch(pano, view, tilt).astype(int) - render_view(pano, view, tilt)).max() <= 1
 
 

@@ -44,6 +44,10 @@ def render_view_torch(equi_img, view, tilt=None):
     padded image is column W - 1) and x is shifted by 1; ``padding_mode="border"`` then only clamps y at the
     poles, which is what the package's ``sample_bilinear`` does.
 
+    No anti-aliasing: the package's ``render_view`` box-reduces the pano by ``view.reduction_factor(W)`` first, and
+    that factor is 1 for the 8192 px pano and 2048 px 90 degree view /process uses (tests/test_geometry.py asserts
+    it). A smaller view would need the avg_pool2d step from the package's docs/geometry.md.
+
     Args:
         equi_img (numpy.ndarray): (H, W, 3) uint8 equirectangular image (rig frame).
         view (sidewalk_panorama_tools.geometry.View): the camera, from ``label_view``.

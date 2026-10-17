@@ -122,6 +122,7 @@ def test_missing_key_is_still_401(app_with):
     ({"camera_pitch": "-2.5", "camera_roll": "1", "tilt_beta": "0.88"}, True, 0.88, "level"),
     ({"camera_pitch": "3", "coord_frame": "rig"}, False, None, "rig"),
     ({"camera_pitch": "3", "camera_roll": "1", "coord_frame": "rig", "tilt_beta": "1"}, False, None, "rig"),
+    ({"x": "1.0", "camera_pitch": "3"}, True, 0.95, "level"),  # the seam: label_view wraps x
 ])
 def test_response_fields(app_with, fields, applied, beta, frame):
     client, _, _ = app_with

@@ -90,7 +90,7 @@ with open('API_VERSION', 'r') as file:
 
 # Rig-tilt correction (docs/API_USAGE.md, "Camera pose and tilt correction"). The default beta is the fraction of the
 # rig tilt measured to leak into a stored label point for the pose record the website sends (sidewalk-panorama-tools
-# #191); it differs from the package's own default (0.9, for the database's camera_pitch column), so it is set here.
+# #191). The package's DEFAULT_BETA is the same value; it is spelled out here because it is part of this API's contract.
 DEFAULT_TILT_BETA = 0.95
 MAX_POSE_DEG = 90.0
 MAX_TILT_BETA = 1.5

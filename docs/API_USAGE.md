@@ -77,9 +77,10 @@ the panorama. With `camera_pitch` given and `coord_frame=level`, the API rotates
 feature the person clicked is at the centre of the view.
 
 - **A request without `camera_pitch` gets no tilt correction**, whatever `camera_roll`, `tilt_beta` and
-  `coord_frame` say. It is the same view as API 1.0.x up to sub-pixel rounding: 1.1.0 renders it with the shared
-  package, which differs from the old renderer by under ~1 px at the label (the old one read the source image about
-  one row low). The regression check (`regression/compare.py`) is how that is confirmed on real labels.
+  `coord_frame` say. It reproduces the API 1.0.x view up to about one pixel at the label, two in the central half,
+  from three rounding defects in the old renderer that the shared package corrects (it read the source about one
+  row low, its focal length was n/(n−1) too short, and it truncated pixel values instead of rounding them).
+- `x = 1.0` is the same column as `x = 0.0` (the panorama wraps).
 - `camera_pitch=0` with no roll, or `tilt_beta=0`, still reports `tilt_applied: true`, but the rotation is zero.
 - `coord_frame=rig` never corrects, even with `camera_pitch` given (`tilt_applied: false`).
 
