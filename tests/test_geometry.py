@@ -73,6 +73,15 @@ def test_torch_grid_matches_numpy_grid(pano_1024, x, y):
     assert (a != b).mean() < 0.005
 
 
+@pytest.mark.parametrize("x, y", [(0.4, 0.0), (0.7, 1.0)])
+def test_torch_matches_package_at_the_poles(pano_1024, x, y):
+    """y = 0 and 1 exactly. An odd view size puts the centre pixel's ray on the pole itself (sy = 0 or H), so the
+    sample reads past the edge row, where padding_mode="border" (not "zeros") matches sample_bilinear's clamp."""
+    view, tilt = label_view(x, y, 90, 255)
+    ours = render_view_torch(pano_1024, view, tilt).astype(int)
+    assert np.abs(ours - render_view(pano_1024, view, tilt)).max() <= 1
+
+
 def test_torch_matches_package_full_size():
     """The production size: an 8192 x 4096 pano and a 2048 view, at the seam."""
     pano = structured_pano(8192)
@@ -142,3 +151,12 @@ def test_sampling_grid_wraps_x():
     view, _ = label_view(0.0, 0.5, 90, 64)
     sx, _ = sampling_grid(view, None, 1024, 512)
     assert sx.min() >= 0 and sx.max() < 1024
+
+
+def test_download_crop_keeps_last_row_and_column():
+    """Panorama._crop trims a black border to the exact non-black box (the download path then resizes it)."""
+    from sidewalk_ai_api.panorama import Panorama
+    img = np.zeros((70, 130, 3), dtype=np.uint8)
+    img[5:65, 10:120] = 200  # a 60 x 110 non-black block
+    pano = Panorama.__new__(Panorama)
+    assert pano._crop(img).shape == (60, 110, 3)

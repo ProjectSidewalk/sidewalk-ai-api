@@ -32,8 +32,8 @@ The following parameters are sent in the body of the request.
 | `x`           | Float     | Yes      | The horizontal coordinate of the label on the equirectangular panorama. This value **must be normalized** to be between 0 and 1, where `0.0` represents the far-left edge and `1.0` represents the far-right edge. To calculate, use: `pixel_x / image_width`. |
 | `y`           | Float     | Yes      | The vertical coordinate of the label on the equirectangular panorama. This value **must be normalized** to be between 0 and 1, where `0.0` represents the top edge and `1.0` represents the bottom edge. To calculate, use: `pixel_y / image_height`. |
 | `city`        | String    | No       | The Project Sidewalk city id (e.g. `chicago-il`). When given, the API first looks for the panorama in the lab's local panorama cache for that city, and only downloads it from Google if it isn't there. |
-| `camera_pitch` | Float    | No       | The panorama camera's pitch in degrees (the label's `camera_pitch`), between -90 and 90. Absent, empty or `NaN` means unknown, and then no tilt correction is made. See [Camera pose and tilt correction](#camera-pose-and-tilt-correction). |
-| `camera_roll`  | Float    | No       | The panorama camera's roll in degrees, between -90 and 90. Absent, empty or `NaN` counts as 0. Used only together with `camera_pitch`. |
+| `camera_pitch` | Float    | No       | The panorama camera's pitch in degrees (the label's `camera_pitch`), between -30 and 30 (real rig tilt is a few degrees, so a larger value is treated as a bad record). Absent, empty or `NaN` means unknown, and then no tilt correction is made. See [Camera pose and tilt correction](#camera-pose-and-tilt-correction). |
+| `camera_roll`  | Float    | No       | The panorama camera's roll in degrees, between -30 and 30. Absent, empty or `NaN` counts as 0 (the tilt is still applied from `camera_pitch`). Used only together with `camera_pitch`. |
 | `tilt_beta`    | Float    | No       | The fraction of the camera's tilt to correct for, between 0 and 1.5. Default `0.95`, measured for the pose the website stores. |
 | `coord_frame`  | String   | No       | `level` (default) or `rig`: which frame `x` and `y` are in. `level` is a label placed by a person in the Project Sidewalk viewer; `rig` means `x`/`y` already point at a pixel of the panorama image (e.g. a label from the AI labeler), and they are never corrected. |
 
@@ -78,8 +78,9 @@ feature the person clicked is at the centre of the view.
 
 - **A request without `camera_pitch` gets no tilt correction**, whatever `camera_roll`, `tilt_beta` and
   `coord_frame` say. It reproduces the API 1.0.x view up to about one pixel at the label, two in the central half,
-  from three rounding defects in the old renderer that the shared package corrects (it read the source about one
-  row low, its focal length was n/(n−1) too short, and it truncated pixel values instead of rounding them).
+  from two geometry errors and one truncation in the old renderer that the shared package corrects (it read the
+  source about one row low, its focal length was n/(n−1) too short, and it truncated pixel values instead of
+  rounding them).
 - `x = 1.0` is the same column as `x = 0.0` (the panorama wraps).
 - `camera_pitch=0` with no (or zero) roll, or `tilt_beta=0`, is no rotation: `tilt_applied: false`, `tilt_beta: null`.
 - `coord_frame=rig` never corrects, even with `camera_pitch` given (`tilt_applied: false`).
@@ -103,7 +104,7 @@ Errors return a JSON object with an `error` message.
 
 | Code  | When                                                                                          |
 | :---- | :-------------------------------------------------------------------------------------------- |
-| `400` | A required parameter is missing, `x`/`y` is outside 0–1, `label_type` isn't supported, or a pose field is invalid (`camera_pitch`/`camera_roll` not a number, infinite or beyond ±90, `tilt_beta` outside 0–1.5, or `coord_frame` not `level`/`rig`). |
+| `400` | A required parameter is missing, `x`/`y` is outside 0–1, `label_type` isn't supported, or a pose field is invalid (`camera_pitch`/`camera_roll` not a number, infinite or beyond ±30, `tilt_beta` outside 0–1.5, or `coord_frame` not `level`/`rig`). |
 | `401` | The API key is missing or wrong.                                                               |
 | `500` | Model inference failed.                                                                        |
 | `502` | The panorama couldn't be loaded from the cache or downloaded from Google (e.g. it no longer exists). |

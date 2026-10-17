@@ -212,7 +212,8 @@ class Panorama:
 
     def _crop(self, image):
         y_nonzero, x_nonzero, _ = np.nonzero(image)
-        return image[np.min(y_nonzero):np.max(y_nonzero), np.min(x_nonzero):np.max(x_nonzero)]
+        # max + 1: the slice end is exclusive, so the last non-black row and column are kept.
+        return image[np.min(y_nonzero):np.max(y_nonzero) + 1, np.min(x_nonzero):np.max(x_nonzero) + 1]
 
     def _fetch_panorama(self):
         dimension_result = self._find_panorama_dimensions()

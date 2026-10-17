@@ -5,6 +5,7 @@ and that the tilt moves the view only for coord_frame=level. The rendered view i
 depth model, which the stub records.
 """
 
+import cv2
 import numpy as np
 import pano_pose
 import pytest
@@ -18,18 +19,30 @@ PANO_W, PANO_H = 2048, 1024  # /process renders width // 4 = a 512 px view
 VIEW = PANO_W // 4
 
 
+def stub_depth_map(shape):
+    """A depth gradient, different along each axis, so a wrong index into it changes the crop."""
+    rows, cols = np.mgrid[0:shape[0], 0:shape[1]].astype(np.float32)
+    return 20.0 + 0.05 * cols + 0.1 * rows
+
+
 class StubDepth:
-    """Records the perspective image and reports 10 m everywhere (crop half-size 610 px, i.e. the whole view)."""
+    """Records the perspective image and reports stub_depth_map (58.4 m at the centre of a 512 px view: a crop
+    half-size of int(6100 / 58.4) = 104 px)."""
     def __init__(self):
         self.images = []
 
     def predict_depth(self, image):
         self.images.append(image)
-        return np.full(image.shape[:2], 10.0, dtype=np.float32)
+        return stub_depth_map(image.shape[:2])
 
 
 class StubValidator:
+    """Records the crop it is given."""
+    def __init__(self):
+        self.images = []
+
     def validate(self, image):
+        self.images.append(image)
         return "correct", 0.97
 
 
@@ -42,9 +55,11 @@ class StubTagger:
 def app_with(monkeypatch):
     """Returns (client, depth stub, set_pano) with the models stubbed and a synthetic panorama served from 'cache'."""
     depth = StubDepth()
+    validator = StubValidator()
     models = main.Models(depth=depth,
                          taggers={t: StubTagger() for t in main.TAGGER_LABEL_TYPES},
-                         validators={t: StubValidator() for t in main.VALIDATOR_LABEL_TYPES})
+                         validators={t: validator for t in main.VALIDATOR_LABEL_TYPES})
+    depth.validator = validator  # so tests can reach the crop through the depth stub
     state = {"image": np.zeros((PANO_H, PANO_W, 3), dtype=np.uint8)}
 
     def fake_panorama(pano_id, cached_image_path=None):
@@ -92,8 +107,9 @@ def centroid(image):
     ({"x": "1.01"}, "x must be between 0 and 1"),
     ({"camera_pitch": "abc"}, "camera_pitch must be a number"),
     ({"camera_pitch": "inf"}, "camera_pitch must be finite"),
-    ({"camera_pitch": "90.5"}, "camera_pitch must be between"),
-    ({"camera_roll": "-91"}, "camera_roll must be between"),
+    ({"camera_pitch": "30.5"}, "camera_pitch must be between -30 and 30"),
+    ({"camera_pitch": "85"}, "camera_pitch must be between -30 and 30"),
+    ({"camera_roll": "-31"}, "camera_roll must be between -30 and 30"),
     ({"camera_roll": "-inf"}, "camera_roll must be finite"),
     ({"tilt_beta": "-0.1"}, "tilt_beta must be between"),
     ({"tilt_beta": "1.6"}, "tilt_beta must be between"),
@@ -214,3 +230,75 @@ def test_rig_frame_marker_at_stored_pixel_is_centred(app_with):
     assert r.get_json()["tilt_applied"] is False
     cx, cy = centroid(depth.images[-1])
     assert abs(cx - VIEW / 2) <= 1 and abs(cy - VIEW / 2) <= 1
+
+
+# --- review additions -----------------------------------------------------------------------------------------------
+
+def test_nan_roll_with_pitch_is_unknown_roll(app_with):
+    """The website sends NULL roll often: NaN roll with a pitch is roll 0, and the tilt is still applied."""
+    client, depth, set_pano = app_with
+    set_pano(np.random.default_rng(1).integers(0, 256, (PANO_H, PANO_W, 3), dtype=np.uint8))
+    body = post(client, camera_pitch="3", camera_roll="nan").get_json()
+    assert body["tilt_applied"] is True and body["tilt_beta"] == 0.95
+    post(client, camera_pitch="3")
+    assert np.array_equal(depth.images[0], depth.images[1])
+
+
+def test_label_view_value_error_is_a_400(app_with, monkeypatch):
+    """A ValueError from the package's own input checks (e.g. y_norm outside [0, 1]) is the request's fault."""
+    client, _, _ = app_with
+
+    def bad_view(*args, **kwargs):
+        raise ValueError("y_norm must be in [0, 1], got 1.5")
+
+    monkeypatch.setattr(main, "label_view", bad_view)
+    r = post(client)
+    assert r.status_code == 400
+    assert r.get_json()["error"] == "y_norm must be in [0, 1], got 1.5"
+
+
+@pytest.mark.parametrize("kwargs, raw, message", [
+    ({"lo": 0.0}, "-1", "v must be at least 0"),
+    ({"hi": 2.0}, "3", "v must be at most 2"),
+    ({"lo": 0.0, "hi": 2.0}, "3", "v must be between 0 and 2"),
+])
+def test_parse_float_bounds_messages(kwargs, raw, message):
+    app = main.create_app(main.Models(None, {}, {}))
+    with app.test_request_context("/process", method="POST", data={"v": raw}):
+        with pytest.raises(main.InvalidField) as e:
+            main.parse_float("v", **kwargs)
+    assert e.value.description == message
+
+
+def test_parse_float_one_sided_ok():
+    app = main.create_app(main.Models(None, {}, {}))
+    with app.test_request_context("/process", method="POST", data={"v": "5"}):
+        assert main.parse_float("v", lo=0.0) == 5.0
+        assert main.parse_float("w", default=1.5, hi=2.0) == 1.5
+
+
+def test_server_timing_header(app_with):
+    client, _, _ = app_with
+    timing = post(client).headers["Server-Timing"]
+    for stage in ("pano;desc=cache;dur=", "project;dur=", "depth;dur=", "tagger;dur=", "validator;dur=", "total;dur="):
+        assert stage in timing
+
+
+def test_auth_applies_to_unknown_paths(app_with):
+    client, _, _ = app_with
+    assert client.get("/no-such-path").status_code == 401
+    assert client.get("/no-such-path", headers=AUTH).status_code == 404
+
+
+def test_crop_uses_depth_at_view_centre(app_with):
+    """The crop is the view around its centre, half-size int(6100 / depth[cy, cx]), resized to 640 px, as RGB."""
+    client, depth, set_pano = app_with
+    set_pano(np.random.default_rng(2).integers(0, 256, (PANO_H, PANO_W, 3), dtype=np.uint8))
+    assert post(client).status_code == 200
+    view = depth.images[-1]
+    c = VIEW // 2
+    half = int(6100 / stub_depth_map(view.shape[:2])[c, c])
+    assert half == 104
+    expected = cv2.cvtColor(cv2.resize(view[c - half:c + half, c - half:c + half], (640, 640),
+                                       interpolation=cv2.INTER_CUBIC), cv2.COLOR_BGR2RGB)
+    assert np.array_equal(np.asarray(depth.validator.images[-1]), expected)

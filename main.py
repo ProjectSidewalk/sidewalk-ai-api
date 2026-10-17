@@ -114,7 +114,8 @@ def create_app(models=None):
 # rig tilt measured to leak into a stored label point for the pose record the website sends (sidewalk-panorama-tools
 # #191). The package's DEFAULT_BETA is the same value; it is spelled out here because it is part of this API's contract.
 DEFAULT_TILT_BETA = 0.95
-MAX_POSE_DEG = 90.0
+# Real rig tilt is a few degrees; a value near 90 is a bad record, and would silently apply a huge rotation.
+MAX_POSE_DEG = 30.0
 MAX_TILT_BETA = 1.5
 COORD_FRAMES = ("level", "rig")
 
@@ -150,6 +151,10 @@ def parse_float(name, default=None, nan_is_none=False, lo=None, hi=None, require
     if not math.isfinite(value):
         raise InvalidField(f"{name} must be finite")
     if (lo is not None and value < lo) or (hi is not None and value > hi):
+        if lo is None:
+            raise InvalidField(f"{name} must be at most {hi:g}")
+        if hi is None:
+            raise InvalidField(f"{name} must be at least {lo:g}")
         raise InvalidField(f"{name} must be between {lo:g} and {hi:g}")
     return value
 
@@ -206,10 +211,13 @@ def process():
         # The shared geometry (sidewalk-panorama-tools): a 90 degree view aimed at the label, 2048 px for the 8192 px
         # pano. In the level frame, a known camera_pitch gives the rig-tilt rotation (None when it is zero: pitch 0
         # and no roll, or beta 0); the rig frame never rotates.
-        if coord_frame == "level" and camera_pitch is not None:
-            view, tilt = label_view(label_x, label_y, 90, width // 4, camera_pitch, camera_roll, tilt_beta)
-        else:
-            view, tilt = label_view(label_x, label_y, 90, width // 4)
+        try:
+            if coord_frame == "level" and camera_pitch is not None:
+                view, tilt = label_view(label_x, label_y, 90, width // 4, camera_pitch, camera_roll, tilt_beta)
+            else:
+                view, tilt = label_view(label_x, label_y, 90, width // 4)
+        except ValueError as e:  # the package's own input checks (e.g. y_norm outside [0, 1]): the request's fault
+            raise InvalidField(str(e))
         tilt_applied = tilt is not None
         perspective_image = panorama.to_perspective_image(view, tilt)
 
