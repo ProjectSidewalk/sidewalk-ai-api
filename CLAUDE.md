@@ -30,7 +30,7 @@ Run locally without Docker (requires CUDA, the submodule, and downloaded checkpo
 ```bash
 export SIDEWALK_AI_API_KEY=<key>          # required; without it every request is a 401
 export SIDEWALK_ALLOW_CPU=1                # only on a machine without a GPU
-gunicorn -w 1 -b 0.0.0.0:5000 --timeout 120 main:app   # production form (see ignition.sh)
+gunicorn -w 1 -b 0.0.0.0:5000 --timeout 120 "main:create_app()"   # production form (see ignition.sh)
 python main.py                            # dev form, Flask's built-in server
 ```
 
@@ -41,7 +41,7 @@ curl -X POST -H "Authorization: Bearer $SIDEWALK_AI_API_KEY" -F "label_type=curb
      -F "x=0.77746582031" -F "y=0.58459472656" http://127.0.0.1:5000/process
 ```
 
-Unit tests (`tests/`, pytest) run on the CPU with no checkpoints, no network and no Depth-Anything-V2 submodule: `SIDEWALK_TEST_STUBS=1` (set by `tests/conftest.py`, never in production) makes `main.py` skip loading the models, and the tests replace them and the panorama with stand-ins. They pin the projection against `sidewalk_panorama_tools.geometry.render_view` and the tilt fields. The venv recipe is in `tests/conftest.py`; run `.venv/bin/pytest -q`. There is no linter or formatter configured. For changes that could affect model outputs (dependency bumps, preprocessing, refactors), run the regression check on the server with prod and a dev instance both up: `python3 regression/compare.py` sends the 50 labels in `regression/labels.csv` to both (all served from the panorama cache, so both see identical pixels) and reports changed outcomes (FAIL) or score movement beyond `--tolerance` (DRIFT), then forces one Google download per label type to check the download path still works on dev. It also fails if dev is more than `--max-slowdown` (1.5×) slower than prod on the cached labels, for the whole request or the model stages alone (from `Server-Timing`, API 1.0.1+). It passes (exit 0) only with no FAIL, no SKIP (both errored), no slowdown, and a clean download check. It only uses the standard library.
+Unit tests (`tests/`, pytest) run on the CPU with no checkpoints, no network and no Depth-Anything-V2 submodule: the tests build the app with `main.create_app(Models(...))` of stand-ins (only `create_app()` with no argument loads the real models) and replace the panorama too. They pin the projection against `sidewalk_panorama_tools.geometry.render_view` and the tilt fields. The venv recipe is in `tests/conftest.py`; run `.venv/bin/pytest -q`. There is no linter or formatter configured. For changes that could affect model outputs (dependency bumps, preprocessing, refactors), run the regression check on the server with prod and a dev instance both up: `python3 regression/compare.py` sends the 50 labels in `regression/labels.csv` to both (all served from the panorama cache, so both see identical pixels) and reports changed outcomes (FAIL) or score movement beyond `--tolerance` (DRIFT), then forces one Google download per label type to check the download path still works on dev. It also fails if dev is more than `--max-slowdown` (1.5×) slower than prod on the cached labels, for the whole request or the model stages alone (from `Server-Timing`, API 1.0.1+). It passes (exit 0) only with no FAIL, no SKIP (both errored), no slowdown, and a clean download check. It only uses the standard library.
 
 ## Request flow (`/process`)
 
@@ -56,9 +56,9 @@ Form fields: `label_type`, `panorama_id`, `x`, `y` (required), `city` (optional,
 
 Each stage's time is returned in a `Server-Timing` response header (`timed()` and an `after_request` hook in `main.py`).
 
-At startup `main.py` exits if torch can't see a GPU, rather than silently running every model on the CPU; `SIDEWALK_ALLOW_CPU=1` overrides this.
+At startup `load_models()` exits if torch can't see a GPU, rather than silently running every model on the CPU; `SIDEWALK_ALLOW_CPU=1` overrides this.
 
-All taggers, validators, and the depth model are instantiated **once at module import** in `main.py` and live on the GPU for the lifetime of the process. Cold start takes a minute or two; gunicorn is intentionally run with a single worker.
+All taggers, validators, and the depth model are instantiated **once at startup** by `load_models()`, which `create_app()` calls (gunicorn runs `"main:create_app()"`, and `python main.py` does the same), and live on the GPU for the lifetime of the process. Routes and hooks are on the `api` blueprint in `main.py`; there is no module-level `app`. Cold start takes a minute or two; gunicorn is intentionally run with a single worker.
 
 ## Conventions and gotchas
 

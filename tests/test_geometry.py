@@ -82,6 +82,14 @@ def test_torch_matches_package_full_size():
     assert np.abs(render_view_torch(pano, view, tilt).astype(int) - render_view(pano, view, tilt)).max() <= 1
 
 
+def test_torch_matches_package_with_antialiasing():
+    """k = 2 (a 16384-wide pano, a 2048 px 90 degree view): both box-reduce before sampling."""
+    pano = structured_pano(16384)
+    view, tilt = label_view(0.9995, 0.55, 90, 2048, camera_pitch=3.0, beta=0.95)
+    assert view.reduction_factor(16384) == 2
+    assert np.abs(render_view_torch(pano, view, tilt).astype(int) - render_view(pano, view, tilt)).max() <= 1
+
+
 def old_rays_in_new_view(pano, x, y):
     """Runs the old renderer and returns, for each output pixel, where its ray lands in the new view, plus the
     raw sample grid of both, in source pixels."""

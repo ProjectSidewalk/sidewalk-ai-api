@@ -42,9 +42,9 @@ class StubTagger:
 def app_with(monkeypatch):
     """Returns (client, depth stub, set_pano) with the models stubbed and a synthetic panorama served from 'cache'."""
     depth = StubDepth()
-    monkeypatch.setattr(main, "depthanything", depth)
-    monkeypatch.setattr(main, "validators", {t: StubValidator() for t in main.VALIDATOR_LABEL_TYPES})
-    monkeypatch.setattr(main, "taggers", {t: StubTagger() for t in main.TAGGER_LABEL_TYPES})
+    models = main.Models(depth=depth,
+                         taggers={t: StubTagger() for t in main.TAGGER_LABEL_TYPES},
+                         validators={t: StubValidator() for t in main.VALIDATOR_LABEL_TYPES})
     state = {"image": np.zeros((PANO_H, PANO_W, 3), dtype=np.uint8)}
 
     def fake_panorama(pano_id, cached_image_path=None):
@@ -57,7 +57,7 @@ def app_with(monkeypatch):
     def set_pano(image):
         state["image"] = image
 
-    return main.app.test_client(), depth, set_pano
+    return main.create_app(models).test_client(), depth, set_pano
 
 
 def post(client, **fields):
@@ -86,6 +86,10 @@ def centroid(image):
 # --- request validation ----------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("fields, message", [
+    ({"x": ""}, "Missing x parameter"),
+    ({"x": "abc"}, "x must be a number"),
+    ({"y": "nan"}, "y must be finite"),
+    ({"x": "1.01"}, "x must be between 0 and 1"),
     ({"camera_pitch": "abc"}, "camera_pitch must be a number"),
     ({"camera_pitch": "inf"}, "camera_pitch must be finite"),
     ({"camera_pitch": "90.5"}, "camera_pitch must be between"),
@@ -93,7 +97,7 @@ def centroid(image):
     ({"camera_roll": "-inf"}, "camera_roll must be finite"),
     ({"tilt_beta": "-0.1"}, "tilt_beta must be between"),
     ({"tilt_beta": "1.6"}, "tilt_beta must be between"),
-    ({"tilt_beta": "nan"}, "tilt_beta must be between"),
+    ({"tilt_beta": "nan"}, "tilt_beta must be finite"),
     ({"tilt_beta": "x"}, "tilt_beta must be a number"),
     ({"coord_frame": "gravity"}, "coord_frame must be one of"),
 ])
@@ -103,6 +107,23 @@ def test_bad_pose_fields_are_400(app_with, fields, message):
     assert r.status_code == 400
     assert message in r.get_json()["error"]
     assert depth.images == []  # rejected before any work
+
+
+def test_malformed_body_is_a_json_400(app_with):
+    """A missing required field is a JSON 400, like every other validation error."""
+    client, _, _ = app_with
+    r = client.post("/process", data={"label_type": "curbramp", "x": "0.5", "y": "0.5"}, headers=AUTH)
+    assert r.status_code == 400 and "error" in r.get_json()
+
+
+def test_models_load_only_without_stand_ins(monkeypatch):
+    """create_app() with no argument is the only path that loads models, and it refuses to start without a GPU."""
+    monkeypatch.delenv("SIDEWALK_ALLOW_CPU", raising=False)
+    monkeypatch.setattr(main.torch.cuda, "is_available", lambda: False)
+    with pytest.raises(SystemExit) as exit_info:
+        main.create_app()
+    assert exit_info.value.code == 3
+    assert not hasattr(main, "app")
 
 
 def test_missing_key_is_still_401(app_with):
@@ -122,6 +143,10 @@ def test_missing_key_is_still_401(app_with):
     ({"camera_pitch": "-2.5", "camera_roll": "1", "tilt_beta": "0.88"}, True, 0.88, "level"),
     ({"camera_pitch": "3", "coord_frame": "rig"}, False, None, "rig"),
     ({"camera_pitch": "3", "camera_roll": "1", "coord_frame": "rig", "tilt_beta": "1"}, False, None, "rig"),
+    ({"camera_pitch": "0"}, False, None, "level"),                         # zero rotation: not applied
+    ({"camera_pitch": "0", "camera_roll": ""}, False, None, "level"),
+    ({"camera_pitch": "3", "tilt_beta": "0"}, False, None, "level"),
+    ({"camera_pitch": "0", "camera_roll": "2"}, True, 0.95, "level"),      # roll alone rotates once pitch is known
     ({"x": "1.0", "camera_pitch": "3"}, True, 0.95, "level"),  # the seam: label_view wraps x
 ])
 def test_response_fields(app_with, fields, applied, beta, frame):
@@ -146,6 +171,7 @@ def test_no_pitch_is_the_untilted_view(app_with):
     assert post(client, tilt_beta="1.2", camera_roll="4").status_code == 200
     assert post(client, coord_frame="rig").status_code == 200
     assert post(client, camera_pitch="0").status_code == 200   # a known zero pitch is no rotation either
+    assert post(client, camera_pitch="3", tilt_beta="0").status_code == 200
     first = depth.images[0]
     for image in depth.images[1:]:
         assert np.array_equal(image, first)

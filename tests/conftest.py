@@ -1,5 +1,5 @@
-"""Lets the tests import the app on a machine with no GPU, no checkpoints, no transformers and no Depth-Anything-V2
-submodule: SIDEWALK_TEST_STUBS=1 makes main.py skip loading the models, which the tests replace with stand-ins.
+"""Lets the tests import main.py on a machine with no GPU, no checkpoints, no transformers and no Depth-Anything-V2
+submodule: the models are only loaded by main.create_app() with no argument, and the tests pass stand-ins instead.
 
 Run from the repo root, in a venv with only the CPU packages (no model downloads, no network):
 
@@ -14,8 +14,6 @@ import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-os.environ["SIDEWALK_TEST_STUBS"] = "1"
-os.environ["SIDEWALK_ALLOW_CPU"] = "1"
 os.environ["SIDEWALK_AI_API_KEY"] = "test-key"
 os.environ.pop("SIDEWALK_SCRAPES_DIR", None)
 

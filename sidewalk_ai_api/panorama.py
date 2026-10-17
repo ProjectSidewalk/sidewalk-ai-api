@@ -42,9 +42,10 @@ def render_view_torch(equi_img, view, tilt=None):
     padded image for ``align_corners=False``, so ``padding_mode="border"`` only clamps y at the poles, which is what
     the package's ``sample_bilinear`` does.
 
-    No anti-aliasing: the package's ``render_view`` box-reduces the pano by ``view.reduction_factor(W)`` first, and
-    that factor is 1 for the 8192 px pano and 2048 px 90 degree view /process uses (tests/test_geometry.py asserts
-    it). A smaller view would need the avg_pool2d step from the package's docs/geometry.md.
+    Anti-aliasing follows the package's ``render_view``: when ``k = view.reduction_factor(W)`` is above 1 the pano
+    is box-reduced k-fold first (``avg_pool2d``, rounded back to whole levels as the package's ``box_reduce`` does)
+    and sampled at the source coordinates divided by k. For the 8192 px pano and 2048 px 90 degree view /process
+    uses, k = 1 and nothing is reduced.
 
     Args:
         equi_img (numpy.ndarray): (H, W, 3) uint8 equirectangular image (rig frame).
@@ -61,10 +62,16 @@ def render_view_torch(equi_img, view, tilt=None):
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     h, w = equi_img.shape[:2]
-    img = torch.from_numpy(np.ascontiguousarray(equi_img)).to(device).permute(2, 0, 1).unsqueeze(0).float()
+    img = torch.from_numpy(np.ascontiguousarray(equi_img)).to(device).permute(2, 0, 1).unsqueeze(0)
     sx, sy = sampling_grid_torch(view, tilt, w, h, device=device)
+    k = view.reduction_factor(w)
+    if k > 1:
+        img = F.avg_pool2d(img.float(), kernel_size=k, stride=k).round()
+        sx, sy, w, h = sx / k, sy / k, w // k, h // k
+    # Pad while still uint8 at k = 1, so a request holds one full-size float pano, not two.
+    img = wrap_pad_torch(img).float()
     grid = normalized_grid_torch(sx, sy, w, h)
-    persp = F.grid_sample(wrap_pad_torch(img), grid, mode="bilinear", padding_mode="border", align_corners=False)
+    persp = F.grid_sample(img, grid, mode="bilinear", padding_mode="border", align_corners=False)
     return persp[0].permute(1, 2, 0).round().clamp(0, 255).byte().cpu().numpy()
 
 

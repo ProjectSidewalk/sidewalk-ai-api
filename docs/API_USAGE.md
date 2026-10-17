@@ -47,7 +47,7 @@ The API returns a JSON object containing the results of the analysis.
 | :---------------------------- | :--------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `label_type`                  | String           | The `label_type` that was processed, echoing the value provided in the request.                                                                                              |
 | `image_source`                | String           | Where the panorama came from: `"cache"` (the local panorama cache) or `"download"` (Google Street View).                                                                    |
-| `tilt_applied`                | Boolean          | `true` when the view was corrected for the camera's tilt: `coord_frame` is `level` and `camera_pitch` was given. |
+| `tilt_applied`                | Boolean          | `true` when the view was rotated to correct for the camera's tilt: `coord_frame` is `level`, `camera_pitch` was given, and the rotation is not zero. |
 | `tilt_beta`                   | Float or null    | The `tilt_beta` used when `tilt_applied` is `true`, otherwise `null`. |
 | `coord_frame`                 | String           | The `coord_frame` the request was read in: `"level"` or `"rig"`. |
 | `api_version`                 | String           | The version of this API that produced the response.                                                                                                                          |
@@ -81,7 +81,7 @@ feature the person clicked is at the centre of the view.
   from three rounding defects in the old renderer that the shared package corrects (it read the source about one
   row low, its focal length was n/(n−1) too short, and it truncated pixel values instead of rounding them).
 - `x = 1.0` is the same column as `x = 0.0` (the panorama wraps).
-- `camera_pitch=0` with no roll, or `tilt_beta=0`, still reports `tilt_applied: true`, but the rotation is zero.
+- `camera_pitch=0` with no (or zero) roll, or `tilt_beta=0`, is no rotation: `tilt_applied: false`, `tilt_beta: null`.
 - `coord_frame=rig` never corrects, even with `camera_pitch` given (`tilt_applied: false`).
 
 ##### Timing header
