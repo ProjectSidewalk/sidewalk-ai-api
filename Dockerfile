@@ -3,7 +3,7 @@ FROM pytorch/pytorch:2.14.1-cuda13.0-cudnn9-runtime
 WORKDIR /app
 
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install wget gcc ffmpeg libsm6 libxext6 -y && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install wget git gcc ffmpeg libsm6 libxext6 -y && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies and models before copying the code, so code changes don't redo these large steps.
 # --break-system-packages: the base image's torch lives in the system Python, so install next to it.
