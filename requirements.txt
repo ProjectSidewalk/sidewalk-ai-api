@@ -49,3 +49,7 @@ typing_extensions==4.16.0
 urllib3==2.8.0
 Werkzeug==3.1.9
 wheel==0.48.0
+# Shared crop geometry (the label view and rig-tilt correction) that sidewalk-validator-ai trains with. Pinned to the
+# commit of sidewalk-panorama-tools PR #221; move the pin to the tag v1.0.0 once it is released. It depends only on
+# numpy (pinned above), so it installs under --no-deps; pip needs git for a git+ requirement (see the Dockerfile).
+sidewalk-panorama-tools @ git+https://github.com/ProjectSidewalk/sidewalk-panorama-tools@c274fb3fb1a2ebc7b3d3f32f0f3eea2b10c00663
