@@ -28,77 +28,51 @@ from PIL import Image
 import cv2
 import torch
 import torch.nn.functional as F
+from sidewalk_panorama_tools.torch_geometry import normalized_grid_torch, sampling_grid_torch, wrap_pad_torch
 
-def equirectangular_to_perspective(equi_img, fov, theta, phi, height, width):
+def render_view_torch(equi_img, view, tilt=None):
+    """Renders ``view`` of an equirectangular image on the GPU, with the geometry of the shared package.
+
+    The source pixel of every output pixel comes from ``sidewalk_panorama_tools.torch_geometry.sampling_grid_torch``,
+    the torch twin of the ``sampling_grid`` the training pipeline renders its crops with (``render_view``), built on
+    the same device as the image. Only the ``grid_sample`` call and the rounding are this API's.
+
+    Conventions (the package's): source pixel *i*'s centre is at ``i + 0.5`` and x wraps at the seam.
+    ``wrap_pad_torch`` pads one wrapped column on each side and ``normalized_grid_torch`` maps the grid onto that
+    padded image for ``align_corners=False``, so ``padding_mode="border"`` only clamps y at the poles, which is what
+    the package's ``sample_bilinear`` does.
+
+    Anti-aliasing follows the package's ``render_view``: when ``k = view.reduction_factor(W)`` is above 1 the pano
+    is box-reduced k-fold first (``avg_pool2d``, kept in float so there is a single rounding at the end) and
+    ``normalized_grid_torch(..., k=k)`` rescales the full-resolution grid onto the reduced pano, with the wrap period
+    the reduced width (the package's docs/geometry.md recipe). For the 8192 px pano and 2048 px 90 degree view
+    /process uses, k = 1 and nothing is reduced.
+
+    Args:
+        equi_img (numpy.ndarray): (H, W, 3) uint8 equirectangular image (rig frame).
+        view (sidewalk_panorama_tools.geometry.View): the camera, from ``label_view``.
+        tilt (numpy.ndarray or None): the 3x3 rig-tilt matrix from ``label_view``, or None for no correction.
+
+    Returns:
+        numpy.ndarray: (view.height, view.width, 3) uint8 perspective image, rounded like ``render_view``.
+
+    Example::
+
+        view, tilt = label_view(0.5, 0.6, 90, 2048, camera_pitch=3, beta=0.95)
+        image = render_view_torch(pano_bgr, view, tilt)  # label at (1024, 1024)
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Prepare the image for PyTorch
-    img = torch.tensor(equi_img, dtype=torch.float32).permute(2, 0, 1).unsqueeze(0).to(device) / 255.0
     h, w = equi_img.shape[:2]
-
-    # Compute the tangent of horizontal and vertical FOV
-    hFOV = float(height) / width * fov
-    w_len = torch.tan(torch.deg2rad(torch.tensor(fov / 2.0, device=device)))
-    h_len = torch.tan(torch.deg2rad(torch.tensor(hFOV / 2.0, device=device)))
-
-    # Generate normalized 3D coordinates in the perspective image space
-    x_map = torch.ones((height, width), dtype=torch.float32, device=device)
-    y_map = torch.linspace(-w_len, w_len, width, device=device).repeat(height, 1)
-    z_map = -torch.linspace(-h_len, h_len, height, device=device).unsqueeze(1).repeat(1, width)
-
-    # Normalize vectors
-    D = torch.sqrt(x_map**2 + y_map**2 + z_map**2)
-    xyz = torch.stack((x_map, y_map, z_map), dim=-1) / D.unsqueeze(-1)
-
-    # Compute rotation matrices
-    y_axis = torch.tensor([0.0, 1.0, 0.0], dtype=torch.float32, device=device)
-    z_axis = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32, device=device)
-
-    R1, _ = cv2.Rodrigues((z_axis * torch.deg2rad(torch.tensor(theta))).cpu().numpy())
-    R2, _ = cv2.Rodrigues((np.dot(R1, y_axis.cpu().numpy()) * -torch.deg2rad(torch.tensor(phi)).item()))
-
-    R1 = torch.tensor(R1, dtype=torch.float32, device=device)
-    R2 = torch.tensor(R2, dtype=torch.float32, device=device)
-
-    # Rotate xyz coordinates
-    xyz = xyz.view(-1, 3).T
-    xyz = torch.matmul(R1, xyz)
-    xyz = torch.matmul(R2, xyz).T
-    xyz = xyz.view(height, width, 3)
-
-    # Convert 3D coordinates to spherical coordinates
-    lat = torch.asin(xyz[:, :, 2])
-    lon = torch.atan2(xyz[:, :, 1], xyz[:, :, 0])
-
-    # Normalize longitude and latitude to pixel coordinates
-    lon = lon / np.pi * (w - 1) / 2.0 + (w - 1) / 2.0
-    lat = lat / (np.pi / 2.0) * (h - 1) / 2.0 + (h - 1) / 2.0
-
-    # Flip latitude to correct the upside-down issue
-    lat = h - lat
-
-    # Normalize to range [-1, 1] for PyTorch grid sampling
-    lon = (lon / ((w - 1) / 2.0)) - 1
-    lat = (lat / ((h - 1) / 2.0)) - 1
-
-    grid = torch.stack((lon, lat), dim=-1).unsqueeze(0)
-
-    # Sample perspective image from equirectangular image
-    persp = F.grid_sample(img, grid, mode='bilinear', padding_mode='border', align_corners=True)
-
-    # Convert back to numpy image
-    return (persp[0].permute(1, 2, 0) * 255).byte().cpu().numpy()
-
-def get_perspective_center_params_from_equi_point(label_x, label_y, equi_width, equi_height):
-    # Convert equirectangular coordinates to spherical coordinates
-    lon = (label_x / equi_width - 0.5) * 2 * np.pi
-    lat = (0.5 - label_y / equi_height) * np.pi
-
-    # Convert spherical angles to degrees for yaw and pitch
-    theta = np.degrees(lon) # Yaw (theta) is longitude
-    phi = np.degrees(lat)   # Pitch (phi) is latitude
-
-    return theta, phi
+    img = torch.from_numpy(np.ascontiguousarray(equi_img)).to(device).permute(2, 0, 1).unsqueeze(0)
+    sx, sy = sampling_grid_torch(view, tilt, w, h, device=device)
+    k = view.reduction_factor(w)
+    if k > 1:
+        img = F.avg_pool2d(img.float(), kernel_size=k, stride=k)
+    # Pad while still uint8 at k = 1, so a request holds one full-size float pano, not two.
+    img = wrap_pad_torch(img).float()
+    grid = normalized_grid_torch(sx, sy, w, h, k=k)
+    persp = F.grid_sample(img, grid, mode="bilinear", padding_mode="border", align_corners=False)
+    return persp[0].permute(1, 2, 0).round().clamp(0, 255).byte().cpu().numpy()
 
 
 class Panorama:
@@ -238,7 +212,8 @@ class Panorama:
 
     def _crop(self, image):
         y_nonzero, x_nonzero, _ = np.nonzero(image)
-        return image[np.min(y_nonzero):np.max(y_nonzero), np.min(x_nonzero):np.max(x_nonzero)]
+        # max + 1: the slice end is exclusive, so the last non-black row and column are kept.
+        return image[np.min(y_nonzero):np.max(y_nonzero) + 1, np.min(x_nonzero):np.max(x_nonzero) + 1]
 
     def _fetch_panorama(self):
         dimension_result = self._find_panorama_dimensions()
@@ -255,37 +230,17 @@ class Panorama:
     def get_equi(self):
         return self.panorama_image
 
-    def to_perspective_image(self, fov, theta, phi, height, width):
+    def to_perspective_image(self, view, tilt=None):
         """
-        Converts the equirectangular panorama image to a perspective image.
+        Renders a perspective view of the panorama (see ``render_view_torch``).
 
         Args:
-            fov (float): Field of view in degrees.
-            theta (float): Yaw angle in degrees.
-            phi (float): Pitch angle in degrees.
-            height (int): Height of the perspective image.
-            width (int): Width of the perspective image.
+            view (sidewalk_panorama_tools.geometry.View): the camera, from ``label_view``.
+            tilt (numpy.ndarray or None): the rig-tilt matrix from ``label_view``, or None for no correction.
 
         Returns:
-            numpy.ndarray: Perspective image.
+            numpy.ndarray: Perspective image, or None if the panorama failed to load.
         """
         if self.panorama_image is None:
             return None
-        return equirectangular_to_perspective(self.panorama_image, fov, theta, phi, height, width)
-
-    def get_perspective_center_params(self, label_x, label_y):
-        """
-        Calculates the yaw (theta) and pitch (phi) angles to center a specific equirectangular point
-        in a perspective image with a fixed FOV of 90 degrees.
-
-        Args:
-            label_x (int): x-coordinate of the point in the equirectangular image.
-            label_y (int): y-coordinate of the point in the equirectangular image.
-
-        Returns:
-            tuple: Yaw (theta) and pitch (phi) angles in degrees.
-        """
-        if self.panorama_image is None:
-            return None
-        equi_height, equi_width = self.panorama_image.shape[:2]
-        return get_perspective_center_params_from_equi_point(label_x, label_y, equi_width, equi_height)
+        return render_view_torch(self.panorama_image, view, tilt)
