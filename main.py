@@ -4,7 +4,7 @@ from flask import Blueprint, Flask, current_app, g, request, jsonify
 from werkzeug.exceptions import BadRequest
 from PIL import Image
 from sidewalk_ai_api.panorama import Panorama
-from sidewalk_ai_api.model_map import MODEL_MAP
+from sidewalk_ai_api.model_map import MODEL_MAP, accuracy_map_sha256
 from sidewalk_panorama_tools.geometry import label_view
 import cv2
 import hmac
@@ -70,6 +70,31 @@ VALIDATOR_LABEL_TYPES = ["crosswalk", "curbramp", "obstacle", "surfaceproblem", 
 accuracy_mappings = {label_type: json.load(open(f"accuracy_mappings/{label_type}.json"))
                  for label_type in VALIDATOR_LABEL_TYPES}
 
+
+def check_accuracy_maps(label_types=VALIDATOR_LABEL_TYPES):
+    """Raises RuntimeError unless every accuracy map is the one MODEL_MAP binds to its validator (by SHA-256) and is
+    well formed: both verdicts, ascending confidence keys in [0.5, 1], non-decreasing accuracies in [0, 1].
+
+    Called by load_models(), so a map that does not belong to the served weights stops the process at startup.
+    """
+    for label_type in label_types:
+        path = f"accuracy_mappings/{label_type}.json"
+        want = MODEL_MAP["validator_models"][label_type].get("accuracy_map_sha256")
+        got = accuracy_map_sha256(path)
+        if got != want:
+            raise RuntimeError(f"{path} (sha256 {got}) is not the map MODEL_MAP binds to validator {label_type} "
+                               f"({want}); refit the map for these weights or fix accuracy_map_sha256")
+        m = accuracy_mappings[label_type]
+        if set(m) != {"correct", "incorrect"}:
+            raise RuntimeError(f"{path}: expected verdicts correct and incorrect, got {sorted(m)}")
+        for verdict, table in m.items():
+            keys = [float(k) for k in table]
+            values = list(table.values())
+            if keys != sorted(keys) or keys[0] != 0.5 or keys[-1] != 1.0:
+                raise RuntimeError(f"{path} {verdict}: thresholds must ascend from 0.5 to 1.0")
+            if any(not 0.0 <= v <= 1.0 for v in values) or any(b < a for a, b in zip(values, values[1:])):
+                raise RuntimeError(f"{path} {verdict}: accuracies must be non-decreasing in [0, 1]")
+
 with open('API_VERSION', 'r') as file:
     API_VERSION = file.read().strip()
 
@@ -85,6 +110,7 @@ def load_models():
         print("No GPU found. Check the GPU driver and that the container was started with --gpus all, "
               "or set SIDEWALK_ALLOW_CPU=1 to run on the CPU.", file=sys.stderr)
         sys.exit(3)
+    check_accuracy_maps()
     # Imported here, not at the top, so tests can import this module without transformers or the submodule.
     from sidewalk_ai_api.tagger import ImageTagger
     from sidewalk_ai_api.validator import ImageValidator

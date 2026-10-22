@@ -5,7 +5,11 @@ and that the tilt moves the view only for coord_frame=level. The rendered view i
 depth model, which the stub records.
 """
 
+import inspect
 import io
+import json
+import re
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -372,6 +376,63 @@ def test_model_map_entries_are_pinned_or_placeholder():
         if entry["revision"] != model_map.PLACEHOLDER_REVISION:
             model_map.pinned_revision(entry, f"validator {label_type}")
         assert label_type in main.VALIDATOR_LABEL_TYPES
+
+
+def test_model_map_dates_parse_as_the_website_parses_them():
+    """training_date must be MM-dd-yyyy: the website parses validator_training_date and tagger_training_date with
+    DateTimeFormatter.ofPattern("MM-dd-yyyy") inside a try that, on failure, logs and casts no vote."""
+    for kind in ("tagger_models", "validator_models"):
+        for label_type, entry in model_map.MODEL_MAP[kind].items():
+            raw = entry["training_date"]
+            assert re.fullmatch(r"\d{2}-\d{2}-\d{4}", raw), (kind, label_type, raw)
+            parsed = datetime.strptime(raw, "%m-%d-%Y")
+            assert parsed.strftime("%m-%d-%Y") == raw and 2024 <= parsed.year <= 2100, (kind, label_type, raw)
+
+
+def test_image_source_values_are_the_websites_enum(app_with):
+    """image_source must be "cache" or "download": the website maps it onto its ai_image_source enum
+    (AiImageSource in LabelAiAssessmentTable.scala) inside the same try."""
+    website_enum = {"cache", "download"}
+    literals = set(re.findall(r'self\.image_source = "([^"]*)"', inspect.getsource(Panorama)))
+    assert literals and literals <= website_enum, literals
+    client, depth, set_pano = app_with
+    assert post(client).get_json()["image_source"] in website_enum
+
+
+def test_incorrect_maps_are_held_back():
+    """Every incorrect map ships capped at HOLD_BACK_CAP until the deployment prior is settled and the revision has
+    production outcomes (sidewalk-validator-ai#56): a map that could cast a Disagree must not land here by accident."""
+    for label_type in main.VALIDATOR_LABEL_TYPES:
+        table = main.accuracy_mappings[label_type]["incorrect"]
+        assert max(table.values()) <= model_map.HOLD_BACK_CAP, label_type
+    assert model_map.HOLD_BACK_CAP < 0.92
+
+
+def test_accuracy_maps_are_bound_to_the_model_map():
+    """Each validator entry records the SHA-256 of the map fitted for it; check_accuracy_maps() (run at startup)
+    refuses any other file, and a malformed map."""
+    for label_type in main.VALIDATOR_LABEL_TYPES:
+        entry = model_map.MODEL_MAP["validator_models"][label_type]
+        assert re.fullmatch(r"[0-9a-f]{64}", entry["accuracy_map_sha256"]), label_type
+        assert model_map.accuracy_map_sha256(f"accuracy_mappings/{label_type}.json") == entry["accuracy_map_sha256"]
+    main.check_accuracy_maps()
+
+
+def test_check_accuracy_maps_rejects_a_swapped_or_broken_map(monkeypatch, tmp_path):
+    bad = tmp_path / "accuracy_mappings"
+    bad.mkdir()
+    (bad / "curbramp.json").write_text(json.dumps(main.accuracy_mappings["curbramp"]) + "\n ")  # same map, other bytes
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(RuntimeError, match="not the map MODEL_MAP binds"):
+        main.check_accuracy_maps(["curbramp"])
+    # the right bytes but a non-monotone table: still refused
+    broken = {"correct": {"0.5": 0.9, "1.0": 0.8}, "incorrect": {"0.5": 0.0, "1.0": 0.5}}
+    (bad / "curbramp.json").write_text(json.dumps(broken))
+    monkeypatch.setitem(model_map.MODEL_MAP["validator_models"]["curbramp"], "accuracy_map_sha256",
+                        model_map.accuracy_map_sha256(bad / "curbramp.json"))
+    monkeypatch.setitem(main.accuracy_mappings, "curbramp", broken)
+    with pytest.raises(RuntimeError, match="non-decreasing"):
+        main.check_accuracy_maps(["curbramp"])
 
 
 @pytest.mark.parametrize("label_type", main.VALIDATOR_LABEL_TYPES)
