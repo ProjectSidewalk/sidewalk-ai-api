@@ -31,24 +31,91 @@ sidewalk-validator-ai doc); after a model-map change, regenerate it there (`anal
 against this repo's model_map.py) and copy it here, or every row fails for the right reason. p(incorrect) is
 `validation_score` when `validation_result` is `incorrect`, else 1 - `validation_score`.
 
-Exit status: 0 when every smoke-set row is within tolerance and no request errored; 1 otherwise.
+Before any request, two preflight checks can stop the run (exit 2): the CSV's validator_revision column must equal
+the revision model_map.py pins for every label type (a stale CSV fails with one line instead of 105), and the
+sidecar parity_expected.provenance.json must say the rows were generated on this machine's CPU ISA, because opencv's
+INTER_CUBIC resize is not bit-identical between arm64 and x86_64 (one level on 2.5-4.2% of crop values, up to 0.05 in
+p; 12 of 105 smoke rows over 0.01 in one x86 run). `--allow-other-arch` downgrades that to a warning.
+
+Know what the rows can and cannot tell: 55 of the 105 smoke-set rows are saturated (expected p(incorrect) below 0.01
+or above 0.99), where a wrong crop or a wrong model still lands within 0.01 of the expected value; those rows are
+carried by the revision, accuracy and whole-response checks, and the other 50 by the probability check.
+
+Exit status: 0 when every smoke-set row is within tolerance, every response parses, and no request errored;
+1 otherwise; 2 when a preflight check fails.
 """
 
 import argparse
 import csv
 import json
 import os
+import platform
 import re
 import sys
-from datetime import datetime
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(HERE))
 from compare import load_api_key  # noqa: E402
+from sidewalk_ai_api.model_map import MODEL_MAP  # noqa: E402  (plain data; no model code is imported)
 
-DEFAULT_EXPECTED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "parity_expected.csv")
+DEFAULT_EXPECTED = os.path.join(HERE, "parity_expected.csv")
+RESULT_FIELDS = ["point_id", "pose", "label_type", "in_smoke_set", "expected_p_incorrect", "expected_accuracy", "status",
+                 "served_p_incorrect", "abs_diff", "served_accuracy", "accuracy_diff", "verdict", "problems"]
+
+
+def normalized_arch(machine=None):
+    """'arm64' for arm64/aarch64, 'x86_64' for x86_64/AMD64, else the string itself (lower case)."""
+    m = (machine or platform.machine()).lower()
+    return {"aarch64": "arm64", "arm64": "arm64", "amd64": "x86_64", "x86_64": "x86_64"}.get(m, m)
+
+
+def provenance_for(expected_path):
+    """The sidecar `<expected>.provenance.json` (how and where the expected values were generated), or None."""
+    path = os.path.splitext(expected_path)[0] + ".provenance.json"
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def preflight(rows, prov, allow_other_arch):
+    """Checks that can fail before a single request is sent. Returns a list of fatal messages."""
+    fatal = []
+    expected_revs = {}
+    for r in rows:
+        if r.get("validator_revision"):
+            expected_revs.setdefault(r["label_type"], set()).add(r["validator_revision"])
+    if not expected_revs:
+        fatal.append("parity_expected.csv has no validator_revision column: regenerate it (see the docstring)")
+    stale = {t: (sorted(revs), MODEL_MAP["validator_models"][t]["revision"]) for t, revs in sorted(expected_revs.items())
+             if revs != {MODEL_MAP["validator_models"][t]["revision"]}}
+    if stale:
+        detail = "; ".join(f"{t}: rows {', '.join(r[:8] for r in revs)} vs pinned {pinned[:8]}" for t, (revs, pinned) in stale.items())
+        fatal.append(f"parity_expected.csv is for other validator revisions than model_map.py pins ({detail}): "
+                     f"regenerate it for the pinned revisions (see the docstring) before trusting this test")
+    if prov:
+        gen = prov.get("generated_on", {})
+        print("expected values generated on: " + ", ".join(f"{k}={v}" for k, v in gen.items()
+                                                           if k in ("date", "platform", "cpu", "device", "opencv", "pillow")))
+        gen_arch = normalized_arch(gen.get("machine", ""))
+        here = normalized_arch()
+        if gen_arch and gen_arch != here:
+            msg = (f"expected values were generated on {gen_arch}; this machine is {here}. opencv's INTER_CUBIC resize "
+                   f"differs across CPU ISAs (up to 0.05 in p, 12 of 105 smoke rows over 0.01 in one x86 run), so "
+                   f"these rows cannot judge an {here} server: regenerate them on the server's ISA "
+                   f"(provenance 'regenerate' field)")
+            if allow_other_arch:
+                print("WARNING: " + msg)
+            else:
+                fatal.append(msg)
+    else:
+        print("WARNING: no parity_expected.provenance.json next to the expected rows; the generating ISA is unknown")
+    return fatal
 
 
 # What the website reads from a /process response (AiService.scala): a field missing, of the wrong type, a
@@ -161,8 +228,19 @@ def main():
                     help="this checkout's accuracy_mappings/, which the instance must reproduce exactly at the served "
                          "confidence (default: next to this script's repo; '' to skip)")
     ap.add_argument("--out", help="also write every row's served value and difference to this CSV")
+    ap.add_argument("--allow-other-arch", action="store_true",
+                    help="run even if the expected rows were generated on another CPU ISA (results are then only "
+                         "indicative; a FAIL may be the ISA, not the server)")
     args = ap.parse_args()
     key = load_api_key()
+
+    with open(args.expected, newline="") as f:
+        rows = list(csv.DictReader(f))
+    fatal = preflight(rows, provenance_for(args.expected), args.allow_other_arch)
+    if fatal:
+        for msg in fatal:
+            print("FATAL: " + msg)
+        return 2
     maps = None
     if args.maps_dir and os.path.isdir(args.maps_dir):
         maps = {t: json.load(open(os.path.join(args.maps_dir, f"{t}.json")))
@@ -170,8 +248,6 @@ def main():
     elif args.maps_dir:
         print(f"WARNING: {args.maps_dir} not found; the served map is not checked against this checkout")
 
-    with open(args.expected, newline="") as f:
-        rows = list(csv.DictReader(f))
     results, failures, errors, first_source = [], 0, 0, None
     for row in rows:
         in_smoke = row["in_smoke_set"].strip().lower() == "true"
@@ -215,7 +291,7 @@ def main():
 
     if args.out:
         with open(args.out, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=list(results[0]))
+            w = csv.DictWriter(f, fieldnames=RESULT_FIELDS)
             w.writeheader()
             w.writerows(results)
 

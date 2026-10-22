@@ -1,0 +1,51 @@
+{
+  "_about": "Binds each accuracy map to the validator revision it was fitted for. main.check_accuracy_maps() refuses to start unless, for every label type, validator_revision equals MODEL_MAP's pinned revision and sha256 equals both the file and MODEL_MAP's accuracy_map_sha256. Refit the map and update this file when the revision changes.",
+  "fitted_by": "sidewalk-validator-ai calibration/calibrate.py --hold-back incorrect (PR #57, c1676d2), fit split val, eval split test, deployment_priors.json measured 2026-10-20",
+  "maps": {
+    "crosswalk": {
+      "validator_revision": "TODO(jon): pin revision after publish",
+      "sha256": "8375e72eaffca87a2b7479c42b29e08df45fec020fa6688e1424447197e5febb",
+      "hold_back": [
+        "incorrect"
+      ],
+      "model_id": "sidewalk-validator-ai-crosswalk",
+      "training_date": "10-21-2026"
+    },
+    "curbramp": {
+      "validator_revision": "TODO(jon): pin revision after publish",
+      "sha256": "e097f568a71aae6be073629843031028c6d39b9342c396b4ab81827af0ca2ece",
+      "hold_back": [
+        "incorrect"
+      ],
+      "model_id": "sidewalk-validator-ai-curbramp",
+      "training_date": "10-21-2026"
+    },
+    "obstacle": {
+      "validator_revision": "TODO(jon): pin revision after publish",
+      "sha256": "b76b567a9d83b8ba03478403e53c9f64556fa86f455d703288756a2fa9e1644f",
+      "hold_back": [
+        "incorrect"
+      ],
+      "model_id": "sidewalk-validator-ai-obstacle",
+      "training_date": "10-21-2026"
+    },
+    "surfaceproblem": {
+      "validator_revision": "TODO(jon): pin revision after publish",
+      "sha256": "fa4eeec29dbcd164b1d08b43dcb877ef9b86ae19822f9b7bcf8971412742c49e",
+      "hold_back": [
+        "incorrect"
+      ],
+      "model_id": "sidewalk-validator-ai-surfaceproblem",
+      "training_date": "10-21-2026"
+    },
+    "nocurbramp": {
+      "validator_revision": "TODO(jon): pin revision after publish",
+      "sha256": "8dc1f8309df13041bb6e027b720d41a2e0baa9491fb4e123c5e45c584dafbf26",
+      "hold_back": [
+        "incorrect"
+      ],
+      "model_id": "sidewalk-validator-ai-nocurbramp",
+      "training_date": "10-21-2026"
+    }
+  }
+}

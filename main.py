@@ -71,19 +71,37 @@ accuracy_mappings = {label_type: json.load(open(f"accuracy_mappings/{label_type}
                  for label_type in VALIDATOR_LABEL_TYPES}
 
 
-def check_accuracy_maps(label_types=VALIDATOR_LABEL_TYPES):
-    """Raises RuntimeError unless every accuracy map is the one MODEL_MAP binds to its validator (by SHA-256) and is
-    well formed: both verdicts, ascending confidence keys in [0.5, 1], non-decreasing accuracies in [0, 1].
+ACCURACY_MAPS_PROVENANCE = "accuracy_mappings/provenance.json"
 
-    Called by load_models(), so a map that does not belong to the served weights stops the process at startup.
+
+def check_accuracy_maps(label_types=VALIDATOR_LABEL_TYPES, provenance_path=ACCURACY_MAPS_PROVENANCE):
+    """Raises RuntimeError unless every accuracy map is the one fitted for the validator revision MODEL_MAP pins, and
+    is well formed: both verdicts, ascending confidence keys in [0.5, 1], non-decreasing accuracies in [0, 1].
+
+    Three things must agree per label type: the file's SHA-256, MODEL_MAP's ``accuracy_map_sha256``, and the
+    ``validator_revision`` + ``sha256`` recorded for that map in ``accuracy_mappings/provenance.json`` against the
+    pinned ``revision``. Called by load_models(), so re-pinning other weights without refitting the map (or
+    swapping a map) stops the process at startup instead of serving an accuracy that belongs to another model.
     """
+    with open(provenance_path) as f:
+        provenance = json.load(f).get("maps", {})
     for label_type in label_types:
         path = f"accuracy_mappings/{label_type}.json"
-        want = MODEL_MAP["validator_models"][label_type].get("accuracy_map_sha256")
+        entry = MODEL_MAP["validator_models"][label_type]
+        want = entry.get("accuracy_map_sha256")
         got = accuracy_map_sha256(path)
         if got != want:
             raise RuntimeError(f"{path} (sha256 {got}) is not the map MODEL_MAP binds to validator {label_type} "
                                f"({want}); refit the map for these weights or fix accuracy_map_sha256")
+        prov = provenance.get(label_type)
+        if not prov:
+            raise RuntimeError(f"{provenance_path} has no entry for {label_type}")
+        if prov.get("sha256") != got:
+            raise RuntimeError(f"{provenance_path}: {label_type} sha256 {prov.get('sha256')} is not {path}'s {got}")
+        if prov.get("validator_revision") != entry.get("revision"):
+            raise RuntimeError(f"{path} was fitted for validator revision {prov.get('validator_revision')!r} but "
+                               f"MODEL_MAP pins {entry.get('revision')!r} for {label_type}; refit the map for the "
+                               f"pinned weights (and update {provenance_path}) before serving them")
         m = accuracy_mappings[label_type]
         if set(m) != {"correct", "incorrect"}:
             raise RuntimeError(f"{path}: expected verdicts correct and incorrect, got {sorted(m)}")
@@ -271,7 +289,10 @@ def process():
     # Half-size of the crop around the label, in pixels: 6100 / depth in metres, so closer features get larger
     # crops. Computed in float64 as training's data_generation.py does; int(float32(1 / d) * 6100) differs for about
     # one label in 90,000 (sidewalk-validator-ai docs/serving-parity-2026-10.md).
-    crop_size_half = int(6100 / float(depth[center_y, center_x]))
+    depth_at_label = float(depth[center_y, center_x])
+    if not math.isfinite(depth_at_label) or depth_at_label <= 0:   # training's depth_sized_crop raises the same way
+        raise InvalidField(f"bad depth {depth_at_label} at the label: cannot size the crop")
+    crop_size_half = int(6100 / depth_at_label)
 
     start_x = max(0, center_x - crop_size_half)
     start_y = max(0, center_y - crop_size_half)
@@ -287,10 +308,6 @@ def process():
 
     perspective_image = cv2.cvtColor(perspective_image, cv2.COLOR_BGR2RGB)
     perspective_image = Image.fromarray(perspective_image)
-    # The validators were trained on crops saved as quality-95 WebP (sidewalk-validator-ai data_generation.save_webp),
-    # so they get the same lossy round trip here, in memory; on raw crops p(incorrect) moved by up to 0.11. The taggers
-    # keep the raw crop: their training data did not go through this pipeline.
-    validator_image = webp_round_trip(perspective_image)
 
     response = {
         "label_type": label_type,
@@ -321,6 +338,11 @@ def process():
     validator = models.validators[label_type]
     try:
         with timed("validator"):
+            # The validators were trained on crops saved as quality-95 WebP (sidewalk-validator-ai
+            # data_generation.save_webp), so they get the same lossy round trip here, in memory (~70 ms, counted in
+            # this stage); on raw crops p(incorrect) moved by up to 0.11. The taggers above keep the raw crop: their
+            # training data did not go through this pipeline.
+            validator_image = webp_round_trip(perspective_image)
             validation_result, validation_confidence = validator.validate(validator_image)
 
         # Find the highest mapping that's less than or equal to the confidence

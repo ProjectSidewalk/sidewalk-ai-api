@@ -5,10 +5,14 @@ and that the tilt moves the view only for coord_frame=level. The rendered view i
 depth model, which the stub records.
 """
 
+import importlib
 import inspect
 import io
 import json
 import re
+import runpy
+import sys
+import types
 from datetime import datetime
 
 import cv2
@@ -345,6 +349,50 @@ def test_crop_half_is_float64_division(app_with, monkeypatch):
     assert np.array_equal(np.asarray(depth.tagger.images[-1]), expected)
 
 
+def test_crop_half_truncates_a_fractional_part_above_half(app_with, monkeypatch):
+    """int(), not round(): 6100 / depth = 200.7 must give a 200 px half-size (round would give 201)."""
+    client, depth, set_pano = app_with
+    d = np.float32(6100 / 200.7)
+    assert 200.5 < 6100 / float(d) < 201 and int(6100 / float(d)) == 200 and round(6100 / float(d)) == 201
+
+    def flat_depth(image):
+        depth.images.append(image)
+        return np.full(image.shape[:2], d, dtype=np.float32)
+
+    monkeypatch.setattr(depth, "predict_depth", flat_depth)
+    set_pano(np.random.default_rng(5).integers(0, 256, (PANO_H, PANO_W, 3), dtype=np.uint8))
+    assert post(client).status_code == 200
+    view = depth.images[-1]
+    c = VIEW // 2
+    expected = cv2.cvtColor(cv2.resize(view[c - 200:c + 200, c - 200:c + 200], (640, 640),
+                                       interpolation=cv2.INTER_CUBIC), cv2.COLOR_BGR2RGB)
+    assert np.array_equal(np.asarray(depth.tagger.images[-1]), expected)
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf")])
+def test_bad_depth_at_the_label_is_a_json_400(app_with, monkeypatch, bad):
+    """Depth 0, negative, NaN or inf cannot size a crop: a JSON 400 naming it, as training's ValueError, not an
+    HTML 500 from ZeroDivisionError or int(nan)."""
+    client, depth, set_pano = app_with
+    monkeypatch.setattr(depth, "predict_depth", lambda image: np.full(image.shape[:2], bad, dtype=np.float32))
+    r = post(client)
+    assert r.status_code == 400 and r.is_json and "bad depth" in r.get_json()["error"]
+
+
+def test_webp_round_trip_runs_inside_the_validator_stage_and_its_error_handling(app_with, monkeypatch):
+    """The round trip is timed as part of the validator stage and an encoder failure is a JSON 500, not HTML."""
+    client, depth, set_pano = app_with
+    r = post(client)
+    assert r.status_code == 200 and "validator;dur=" in r.headers["Server-Timing"]
+
+    def boom(image, quality=95):
+        raise RuntimeError("no WebP encoder")
+
+    monkeypatch.setattr(main, "webp_round_trip", boom)
+    r = post(client)
+    assert r.status_code == 500 and r.is_json and "no WebP encoder" in r.get_json()["error"]
+
+
 def test_webp_round_trip_is_q95_pillow():
     """The validator's copy is what Pillow's WebP encoder at quality 95 decodes to: lossy, RGB, same size."""
     crop = Image.fromarray(np.random.default_rng(4).integers(0, 256, (480, 640, 3), dtype=np.uint8))
@@ -366,6 +414,45 @@ def test_pinned_revision_rejects_placeholders():
     for bad in (model_map.PLACEHOLDER_REVISION, "", "main", "abc123", "0" * 39, "G" * 40):
         with pytest.raises(RuntimeError, match="revision is not pinned"):
             model_map.pinned_revision({"model_id": "m", "revision": bad}, "validator curbramp")
+
+
+def test_image_validator_refuses_a_placeholder_before_loading(monkeypatch):
+    """ImageValidator goes through pinned_revision(): with the placeholder it raises before transformers is asked
+    for anything (a dropped call would download the repo's HEAD)."""
+    calls = []
+
+    class NeverLoaded:
+        @staticmethod
+        def from_pretrained(*a, **k):
+            calls.append((a, k))
+            raise AssertionError("from_pretrained must not be reached with a placeholder revision")
+
+    fake_transformers = types.SimpleNamespace(AutoImageProcessor=NeverLoaded, AutoModelForImageClassification=NeverLoaded)
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+    sys.modules.pop("sidewalk_ai_api.validator", None)
+    validator = importlib.import_module("sidewalk_ai_api.validator")
+    monkeypatch.setitem(model_map.MODEL_MAP["validator_models"]["curbramp"], "revision", model_map.PLACEHOLDER_REVISION)
+    with pytest.raises(RuntimeError, match="validator curbramp .* revision is not pinned"):
+        validator.ImageValidator("curbramp")
+    assert calls == []
+    sys.modules.pop("sidewalk_ai_api.validator", None)
+
+
+def test_download_hf_models_refuses_a_placeholder_before_downloading(monkeypatch):
+    """download_hf_models.py checks every revision first: with one placeholder it raises before any download."""
+    calls = []
+
+    def never(*a, **k):
+        calls.append((a, k))
+        raise AssertionError("no download may start with an unpinned entry")
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", types.SimpleNamespace(hf_hub_download=never, snapshot_download=never))
+    for t in main.VALIDATOR_LABEL_TYPES:          # pin every other entry, leave exactly one placeholder
+        monkeypatch.setitem(model_map.MODEL_MAP["validator_models"][t], "revision",
+                            model_map.PLACEHOLDER_REVISION if t == "obstacle" else "b" * 40)
+    with pytest.raises(RuntimeError, match="validator_models obstacle .* revision is not pinned"):
+        runpy.run_path("download_hf_models.py", run_name="__main__")
+    assert calls == []
 
 
 def test_model_map_entries_are_pinned_or_placeholder():
@@ -418,18 +505,44 @@ def test_accuracy_maps_are_bound_to_the_model_map():
     main.check_accuracy_maps()
 
 
+def test_accuracy_maps_share_one_grid():
+    """All five maps use the same 231 confidence thresholds (the grid calibrate.py writes), per verdict."""
+    grids = {(t, v): tuple(main.accuracy_mappings[t][v]) for t in main.VALIDATOR_LABEL_TYPES for v in ("correct", "incorrect")}
+    assert len(set(grids.values())) == 1 and len(next(iter(grids.values()))) == 231
+
+
+def test_check_accuracy_maps_rejects_a_map_fitted_for_another_revision(monkeypatch, tmp_path):
+    """provenance.json binds each map to a validator revision: re-pinning other weights without refitting is refused."""
+    prov = json.load(open("accuracy_mappings/provenance.json"))
+    assert set(prov["maps"]) == set(main.VALIDATOR_LABEL_TYPES)
+    for t, m in prov["maps"].items():
+        assert m["validator_revision"] == model_map.MODEL_MAP["validator_models"][t]["revision"]
+        assert m["sha256"] == model_map.MODEL_MAP["validator_models"][t]["accuracy_map_sha256"]
+    monkeypatch.setitem(model_map.MODEL_MAP["validator_models"]["crosswalk"], "revision", "a" * 40)
+    with pytest.raises(RuntimeError, match="fitted for validator revision .* but MODEL_MAP pins"):
+        main.check_accuracy_maps(["crosswalk"])
+    other = tmp_path / "provenance.json"
+    other.write_text(json.dumps({"maps": {}}))
+    with pytest.raises(RuntimeError, match="no entry for curbramp"):
+        main.check_accuracy_maps(["curbramp"], provenance_path=str(other))
+
+
 def test_check_accuracy_maps_rejects_a_swapped_or_broken_map(monkeypatch, tmp_path):
     bad = tmp_path / "accuracy_mappings"
     bad.mkdir()
     (bad / "curbramp.json").write_text(json.dumps(main.accuracy_mappings["curbramp"]) + "\n ")  # same map, other bytes
+    (bad / "provenance.json").write_text(json.dumps(json.load(open("accuracy_mappings/provenance.json"))))
     monkeypatch.chdir(tmp_path)
     with pytest.raises(RuntimeError, match="not the map MODEL_MAP binds"):
         main.check_accuracy_maps(["curbramp"])
     # the right bytes but a non-monotone table: still refused
     broken = {"correct": {"0.5": 0.9, "1.0": 0.8}, "incorrect": {"0.5": 0.0, "1.0": 0.5}}
     (bad / "curbramp.json").write_text(json.dumps(broken))
-    monkeypatch.setitem(model_map.MODEL_MAP["validator_models"]["curbramp"], "accuracy_map_sha256",
-                        model_map.accuracy_map_sha256(bad / "curbramp.json"))
+    sha = model_map.accuracy_map_sha256(bad / "curbramp.json")
+    monkeypatch.setitem(model_map.MODEL_MAP["validator_models"]["curbramp"], "accuracy_map_sha256", sha)
+    prov = json.load(open(bad / "provenance.json"))
+    prov["maps"]["curbramp"]["sha256"] = sha
+    (bad / "provenance.json").write_text(json.dumps(prov))
     monkeypatch.setitem(main.accuracy_mappings, "curbramp", broken)
     with pytest.raises(RuntimeError, match="non-decreasing"):
         main.check_accuracy_maps(["curbramp"])
