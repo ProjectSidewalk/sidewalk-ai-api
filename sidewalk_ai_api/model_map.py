@@ -1,3 +1,29 @@
+"""Which model weights the API serves: one HuggingFace repo and commit per model.
+
+The validator entries are for the October 2026 retrain (sidewalk-validator-ai round 3: panorama-grouped split,
+tilt-corrected label-centred crops, ViT-B depth sizing, q95 WebP crops). Their repos are not published yet, so each
+``revision`` is PLACEHOLDER_REVISION, and ``pinned_revision()`` refuses to load such an entry: a build with an unpinned
+model fails at image build (download_hf_models.py) or at startup instead of silently serving the old weights.
+"""
+import re
+
+# TODO(jon): pin revision after publish. Replace every PLACEHOLDER_REVISION below with the HuggingFace commit of the
+# round-3 upload (publish_to_hf.py in sidewalk-validator-ai), one per label type, and confirm training_date.
+PLACEHOLDER_REVISION = "TODO(jon): pin revision after publish"
+
+
+def pinned_revision(entry, what="model"):
+    """The 40-hex HuggingFace commit of a MODEL_MAP entry; RuntimeError naming the entry if it is a placeholder.
+
+    Example: pinned_revision(MODEL_MAP["validator_models"]["curbramp"], "validator curbramp") -> "969ad5a3..."
+    """
+    revision = str(entry.get("revision", ""))
+    if revision == PLACEHOLDER_REVISION or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise RuntimeError(f"{what} ({entry.get('model_id')}): revision is not pinned ({revision!r}); "
+                           "set the HuggingFace commit in sidewalk_ai_api/model_map.py")
+    return revision
+
+
 MODEL_MAP = {
     "tagger_models": {
         "crosswalk": {
@@ -28,28 +54,28 @@ MODEL_MAP = {
     "validator_models": {
         "crosswalk": {
             "model_id": "sidewalk-validator-ai-crosswalk",
-            "training_date": "08-16-2025",
-            "revision": "b7936e5bd17a4b96db301f954e5d3a5fe9eaf361"
+            "training_date": "10-21-2026",
+            "revision": PLACEHOLDER_REVISION
         },
         "curbramp": {
             "model_id": "sidewalk-validator-ai-curbramp",
-            "training_date": "08-16-2025",
-            "revision": "969ad5a33079db7885c9e9a4eb5cd0f39d8fe57a"
+            "training_date": "10-21-2026",
+            "revision": PLACEHOLDER_REVISION
         },
         "obstacle": {
             "model_id": "sidewalk-validator-ai-obstacle",
-            "training_date": "08-16-2025",
-            "revision": "8f0fe8fc48748fac35098e74c1848d015126deef"
+            "training_date": "10-21-2026",
+            "revision": PLACEHOLDER_REVISION
         },
         "surfaceproblem": {
             "model_id": "sidewalk-validator-ai-surfaceproblem",
-            "training_date": "08-16-2025",
-            "revision": "0e1439daa5667c8a81f63e75f835bd51221df4c2"
+            "training_date": "10-21-2026",
+            "revision": PLACEHOLDER_REVISION
         },
         "nocurbramp": {
             "model_id": "sidewalk-validator-ai-nocurbramp",
-            "training_date": "08-16-2025",
-            "revision": "9f3f3bb2f40864a468fb65e43644ee5ba54e3e19"
+            "training_date": "10-21-2026",
+            "revision": PLACEHOLDER_REVISION
         }
     }
 }

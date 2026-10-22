@@ -8,6 +8,7 @@ from sidewalk_ai_api.model_map import MODEL_MAP
 from sidewalk_panorama_tools.geometry import label_view
 import cv2
 import hmac
+import io
 import json
 import logging
 import math
@@ -177,6 +178,20 @@ def parse_tilt_fields():
     return camera_pitch, camera_roll, tilt_beta, coord_frame
 
 
+# The WebP quality the training crops were written with (sidewalk-validator-ai data_generation.save_webp).
+WEBP_QUALITY = 95
+
+
+def webp_round_trip(image, quality=WEBP_QUALITY):
+    """`image` (PIL, RGB) encoded as WebP at `quality` and decoded again, as every training crop was.
+
+    Example: webp_round_trip(Image.fromarray(crop)) -> a new RGB PIL image with WebP's lossy changes applied.
+    """
+    buf = io.BytesIO()
+    image.save(buf, format="WEBP", quality=quality)
+    return Image.open(io.BytesIO(buf.getvalue())).convert("RGB")
+
+
 @api.route("/process", methods=["POST"])
 def process():
     models = current_app.config["MODELS"]
@@ -227,8 +242,10 @@ def process():
     center_x, center_y = perspective_image.shape[1] // 2, perspective_image.shape[0] // 2
     img_h, img_w = perspective_image.shape[:2]
 
-    inv_depth = 1 / depth[center_y, center_x]
-    crop_size_half = int(inv_depth * 6100)
+    # Half-size of the crop around the label, in pixels: 6100 / depth in metres, so closer features get larger
+    # crops. Computed in float64 as training's data_generation.py does; int(float32(1 / d) * 6100) differs for about
+    # one label in 90,000 (sidewalk-validator-ai docs/serving-parity-2026-10.md).
+    crop_size_half = int(6100 / float(depth[center_y, center_x]))
 
     start_x = max(0, center_x - crop_size_half)
     start_y = max(0, center_y - crop_size_half)
@@ -244,6 +261,10 @@ def process():
 
     perspective_image = cv2.cvtColor(perspective_image, cv2.COLOR_BGR2RGB)
     perspective_image = Image.fromarray(perspective_image)
+    # The validators were trained on crops saved as quality-95 WebP (sidewalk-validator-ai data_generation.save_webp),
+    # so they get the same lossy round trip here, in memory; on raw crops p(incorrect) moved by up to 0.11. The taggers
+    # keep the raw crop: their training data did not go through this pipeline.
+    validator_image = webp_round_trip(perspective_image)
 
     response = {
         "label_type": label_type,
@@ -274,7 +295,7 @@ def process():
     validator = models.validators[label_type]
     try:
         with timed("validator"):
-            validation_result, validation_confidence = validator.validate(perspective_image)
+            validation_result, validation_confidence = validator.validate(validator_image)
 
         # Find the highest mapping that's less than or equal to the confidence
         accuracy = 0

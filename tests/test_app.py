@@ -5,13 +5,17 @@ and that the tilt moves the view only for coord_frame=level. The rendered view i
 depth model, which the stub records.
 """
 
+import io
+
 import cv2
 import numpy as np
 import pano_pose
 import pytest
+from PIL import Image
 from sidewalk_panorama_tools.geometry import label_pixel, label_view, tilt_matrix
 
 import main
+from sidewalk_ai_api import model_map
 from sidewalk_ai_api.panorama import Panorama
 
 AUTH = {"Authorization": "Bearer test-key"}
@@ -47,7 +51,12 @@ class StubValidator:
 
 
 class StubTagger:
+    """Records the crop it is given."""
+    def __init__(self):
+        self.images = []
+
     def inference(self, image):
+        self.images.append(image)
         return [], [], {}
 
 
@@ -56,10 +65,11 @@ def app_with(monkeypatch):
     """Returns (client, depth stub, set_pano) with the models stubbed and a synthetic panorama served from 'cache'."""
     depth = StubDepth()
     validator = StubValidator()
+    tagger = StubTagger()
     models = main.Models(depth=depth,
-                         taggers={t: StubTagger() for t in main.TAGGER_LABEL_TYPES},
+                         taggers={t: tagger for t in main.TAGGER_LABEL_TYPES},
                          validators={t: validator for t in main.VALIDATOR_LABEL_TYPES})
-    depth.validator = validator  # so tests can reach the crop through the depth stub
+    depth.validator, depth.tagger = validator, tagger  # so tests can reach the crops through the depth stub
     state = {"image": np.zeros((PANO_H, PANO_W, 3), dtype=np.uint8)}
 
     def fake_panorama(pano_id, cached_image_path=None):
@@ -291,7 +301,8 @@ def test_auth_applies_to_unknown_paths(app_with):
 
 
 def test_crop_uses_depth_at_view_centre(app_with):
-    """The crop is the view around its centre, half-size int(6100 / depth[cy, cx]), resized to 640 px, as RGB."""
+    """The crop is the view around its centre, half-size int(6100 / depth[cy, cx]), resized to 640 px, as RGB: the
+    tagger gets it raw, the validator after the q95 WebP round trip the training crops went through."""
     client, depth, set_pano = app_with
     set_pano(np.random.default_rng(2).integers(0, 256, (PANO_H, PANO_W, 3), dtype=np.uint8))
     assert post(client).status_code == 200
@@ -301,4 +312,77 @@ def test_crop_uses_depth_at_view_centre(app_with):
     assert half == 104
     expected = cv2.cvtColor(cv2.resize(view[c - half:c + half, c - half:c + half], (640, 640),
                                        interpolation=cv2.INTER_CUBIC), cv2.COLOR_BGR2RGB)
-    assert np.array_equal(np.asarray(depth.validator.images[-1]), expected)
+    assert np.array_equal(np.asarray(depth.tagger.images[-1]), expected)
+    served = depth.validator.images[-1]
+    assert served.mode == "RGB" and served.size == (640, 640)
+    assert np.array_equal(np.asarray(served), np.asarray(main.webp_round_trip(Image.fromarray(expected))))
+    # q95 WebP is lossy, so on noise the validator's copy is not the raw crop (and the tagger's still is).
+    assert not np.array_equal(np.asarray(served), expected)
+
+
+def test_crop_half_is_float64_division(app_with, monkeypatch):
+    """int(6100 / depth) in float64, as training: a depth where float32(1 / d) * 6100 rounds the other way."""
+    client, depth, set_pano = app_with
+    d = np.float32(30.5)                                 # 6100 / 30.5 = 200.0 exactly in float64 ...
+    assert int(np.float32(1) / d * 6100) == 199          # ... but 199 through the float32 reciprocal
+    def flat_depth(image):
+        depth.images.append(image)
+        return np.full(image.shape[:2], d, dtype=np.float32)
+
+    monkeypatch.setattr(depth, "predict_depth", flat_depth)
+    set_pano(np.random.default_rng(3).integers(0, 256, (PANO_H, PANO_W, 3), dtype=np.uint8))
+    assert post(client).status_code == 200
+    assert np.asarray(depth.tagger.images[-1]).shape == (640, 640, 3)
+    # a 200 px half-size cuts a 400 px square; 199 would too, so check the pixels: the raw crop must be the 400 px one
+    view = depth.images[-1]
+    c = VIEW // 2
+    expected = cv2.cvtColor(cv2.resize(view[c - 200:c + 200, c - 200:c + 200], (640, 640),
+                                       interpolation=cv2.INTER_CUBIC), cv2.COLOR_BGR2RGB)
+    assert np.array_equal(np.asarray(depth.tagger.images[-1]), expected)
+
+
+def test_webp_round_trip_is_q95_pillow():
+    """The validator's copy is what Pillow's WebP encoder at quality 95 decodes to: lossy, RGB, same size."""
+    crop = Image.fromarray(np.random.default_rng(4).integers(0, 256, (480, 640, 3), dtype=np.uint8))
+    out = main.webp_round_trip(crop)
+    buf = io.BytesIO()
+    crop.save(buf, format="WEBP", quality=95)
+    assert np.array_equal(np.asarray(out), np.asarray(Image.open(io.BytesIO(buf.getvalue())).convert("RGB")))
+    assert out.mode == "RGB" and out.size == crop.size
+    assert not np.array_equal(np.asarray(out), np.asarray(crop))
+    assert main.WEBP_QUALITY == 95
+
+
+# --- model map and accuracy maps -------------------------------------------------------------------------------------
+
+def test_pinned_revision_rejects_placeholders():
+    """A placeholder or malformed revision is a RuntimeError naming the model, so an unpublished model cannot load."""
+    good = {"model_id": "m", "revision": "0" * 40}
+    assert model_map.pinned_revision(good) == "0" * 40
+    for bad in (model_map.PLACEHOLDER_REVISION, "", "main", "abc123", "0" * 39, "G" * 40):
+        with pytest.raises(RuntimeError, match="revision is not pinned"):
+            model_map.pinned_revision({"model_id": "m", "revision": bad}, "validator curbramp")
+
+
+def test_model_map_entries_are_pinned_or_placeholder():
+    """Every entry is a 40-hex commit or the one placeholder (never a branch name); taggers are always pinned."""
+    for label_type, entry in model_map.MODEL_MAP["tagger_models"].items():
+        model_map.pinned_revision(entry, f"tagger {label_type}")
+    for label_type, entry in model_map.MODEL_MAP["validator_models"].items():
+        if entry["revision"] != model_map.PLACEHOLDER_REVISION:
+            model_map.pinned_revision(entry, f"validator {label_type}")
+        assert label_type in main.VALIDATOR_LABEL_TYPES
+
+
+@pytest.mark.parametrize("label_type", main.VALIDATOR_LABEL_TYPES)
+def test_accuracy_map_format(label_type):
+    """accuracy_mappings/<type>.json: both verdicts, ascending confidence keys in [0.5, 1], non-decreasing accuracies
+    in [0, 1], so the lookup's 'highest threshold <= confidence' walk is sound."""
+    m = main.accuracy_mappings[label_type]
+    assert set(m) == {"correct", "incorrect"}
+    for verdict, table in m.items():
+        keys = [float(k) for k in table]
+        assert keys == sorted(keys) and keys[0] == 0.5 and keys[-1] == 1.0, verdict
+        values = list(table.values())
+        assert all(0.0 <= v <= 1.0 for v in values), verdict
+        assert all(b >= a for a, b in zip(values, values[1:])), verdict
