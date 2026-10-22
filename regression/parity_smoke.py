@@ -26,10 +26,16 @@ Then, with the dev instance up (`./docker_build.sh dev && ./docker_start.sh dev`
 
 Uses only the standard library. The API key comes from SIDEWALK_AI_API_KEY or ~/.sidewalk-ai-api.env, as compare.py.
 
-The expected values are for the validator revisions the CSV was generated with (its provenance is in the
-sidewalk-validator-ai doc); after a model-map change, regenerate it there (`analysis/serving_parity.py expected`
-against this repo's model_map.py) and copy it here, or every row fails for the right reason. p(incorrect) is
-`validation_score` when `validation_result` is `incorrect`, else 1 - `validation_score`.
+Run it on the server host (an SSH session on the machine that runs the container), not from a laptop: the ISA
+preflight below compares the sidecar with the CPU of the machine running this script, and it is the server's CPU
+that renders the crops.
+
+The expected values are for the validator revisions and maps the CSV was generated with: parity_expected.provenance.json
+beside it says which revisions, which maps, and on what machine and package versions (and how to regenerate). After
+a model-map change, regenerate the rows (sidewalk-validator-ai `analysis/serving_parity.py expected` against this
+repo's model_map.py, then expected_accuracy from this checkout's maps and validator_revision from model_map.py),
+copy them here and rewrite the sidecar, or every row fails for the right reason. p(incorrect) is `validation_score`
+when `validation_result` is `incorrect`, else 1 - `validation_score`.
 
 Before any request, two preflight checks can stop the run (exit 2): the CSV's validator_revision column must equal
 the revision model_map.py pins for every label type (a stale CSV fails with one line instead of 105), and the
@@ -70,7 +76,7 @@ RESULT_FIELDS = ["point_id", "pose", "label_type", "in_smoke_set", "expected_p_i
 
 def normalized_arch(machine=None):
     """'arm64' for arm64/aarch64, 'x86_64' for x86_64/AMD64, else the string itself (lower case)."""
-    m = (machine or platform.machine()).lower()
+    m = (platform.machine() if machine is None else machine).lower()
     return {"aarch64": "arm64", "arm64": "arm64", "amd64": "x86_64", "x86_64": "x86_64"}.get(m, m)
 
 
@@ -84,37 +90,54 @@ def provenance_for(expected_path):
 
 
 def preflight(rows, prov, allow_other_arch):
-    """Checks that can fail before a single request is sent. Returns a list of fatal messages."""
+    """Checks that can fail before a single request is sent. Returns a list of fatal messages (and prints warnings).
+
+    Run this on the server host, not from a laptop: the ISA check compares the sidecar with platform.machine() of
+    the machine running this script, and it is the server's CPU that renders the crops.
+    """
     fatal = []
+    if "validator_revision" not in (rows[0] if rows else {}):
+        fatal.append("parity_expected.csv has no validator_revision column: regenerate it (see the docstring)")
     expected_revs = {}
     for r in rows:
-        if r.get("validator_revision"):
-            expected_revs.setdefault(r["label_type"], set()).add(r["validator_revision"])
-    if not expected_revs:
-        fatal.append("parity_expected.csv has no validator_revision column: regenerate it (see the docstring)")
-    stale = {t: (sorted(revs), MODEL_MAP["validator_models"][t]["revision"]) for t, revs in sorted(expected_revs.items())
-             if revs != {MODEL_MAP["validator_models"][t]["revision"]}}
+        expected_revs.setdefault(r["label_type"], set()).add((r.get("validator_revision") or "").strip())
+    unknown = sorted(t for t in expected_revs if t not in MODEL_MAP["validator_models"])
+    if unknown:
+        fatal.append(f"parity_expected.csv has label_type(s) {unknown} that model_map.py does not serve "
+                     f"(known: {sorted(MODEL_MAP['validator_models'])})")
+    stale = {}
+    for t, revs in sorted(expected_revs.items()):
+        if t in unknown:
+            continue
+        pinned = MODEL_MAP["validator_models"][t]["revision"]
+        if revs != {pinned}:   # a blank revision counts as stale: nothing says what the rows are for
+            stale[t] = (sorted(r or "(blank)" for r in revs), pinned)
     if stale:
-        detail = "; ".join(f"{t}: rows {', '.join(r[:8] for r in revs)} vs pinned {pinned[:8]}" for t, (revs, pinned) in stale.items())
+        detail = "; ".join(f"{t}: rows {', '.join(revs)} vs pinned {pinned}" for t, (revs, pinned) in stale.items())
         fatal.append(f"parity_expected.csv is for other validator revisions than model_map.py pins ({detail}): "
                      f"regenerate it for the pinned revisions (see the docstring) before trusting this test")
-    if prov:
-        gen = prov.get("generated_on", {})
-        print("expected values generated on: " + ", ".join(f"{k}={v}" for k, v in gen.items()
-                                                           if k in ("date", "platform", "cpu", "device", "opencv", "pillow")))
-        gen_arch = normalized_arch(gen.get("machine", ""))
-        here = normalized_arch()
-        if gen_arch and gen_arch != here:
-            msg = (f"expected values were generated on {gen_arch}; this machine is {here}. opencv's INTER_CUBIC resize "
-                   f"differs across CPU ISAs (up to 0.05 in p, 12 of 105 smoke rows over 0.01 in one x86 run), so "
-                   f"these rows cannot judge an {here} server: regenerate them on the server's ISA "
-                   f"(provenance 'regenerate' field)")
-            if allow_other_arch:
-                print("WARNING: " + msg)
-            else:
-                fatal.append(msg)
-    else:
+    if not prov:
         print("WARNING: no parity_expected.provenance.json next to the expected rows; the generating ISA is unknown")
+        return fatal
+    gen = prov.get("generated_on")
+    if not isinstance(gen, dict) or not gen:
+        print("WARNING: the provenance sidecar has no generated_on block; the generating ISA is unknown")
+        return fatal
+    print("expected values generated on: " + ", ".join(f"{k}={v}" for k, v in gen.items()
+                                                       if k in ("date", "platform", "cpu", "device", "opencv", "pillow")))
+    gen_arch = normalized_arch(gen.get("machine", ""))
+    here = normalized_arch()
+    if not gen_arch:
+        print("WARNING: generated_on.machine is empty; cannot tell whether the rows match this machine's ISA")
+    elif gen_arch != here:
+        msg = (f"expected values were generated on {gen_arch}; this machine is {here}. opencv's INTER_CUBIC resize "
+               f"differs across CPU ISAs (up to 0.05 in p, 12 of 105 smoke rows over 0.01 in one x86 run), so "
+               f"these rows cannot judge an {here} server: regenerate them on the server's ISA "
+               f"(provenance 'regenerate' field)")
+        if allow_other_arch:
+            print("WARNING: " + msg)
+        else:
+            fatal.append(msg)
     return fatal
 
 

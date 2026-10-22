@@ -4,7 +4,7 @@ from flask import Blueprint, Flask, current_app, g, request, jsonify
 from werkzeug.exceptions import BadRequest
 from PIL import Image
 from sidewalk_ai_api.panorama import Panorama
-from sidewalk_ai_api.model_map import MODEL_MAP, accuracy_map_sha256
+from sidewalk_ai_api.model_map import HOLD_BACK_CAP, MODEL_MAP, accuracy_map_sha256
 from sidewalk_panorama_tools.geometry import label_view
 import cv2
 import hmac
@@ -80,8 +80,10 @@ def check_accuracy_maps(label_types=VALIDATOR_LABEL_TYPES, provenance_path=ACCUR
 
     Three things must agree per label type: the file's SHA-256, MODEL_MAP's ``accuracy_map_sha256``, and the
     ``validator_revision`` + ``sha256`` recorded for that map in ``accuracy_mappings/provenance.json`` against the
-    pinned ``revision``. Called by load_models(), so re-pinning other weights without refitting the map (or
-    swapping a map) stops the process at startup instead of serving an accuracy that belongs to another model.
+    pinned ``revision``; and every verdict the provenance lists under ``hold_back`` must stay at or below
+    HOLD_BACK_CAP in the map. Called by load_models(), so re-pinning other weights without refitting the map,
+    swapping a map, or shipping an uncapped map for a held-back verdict stops the process at startup instead of
+    serving an accuracy (or a Disagree vote) that was not decided.
     """
     with open(provenance_path) as f:
         provenance = json.load(f).get("maps", {})
@@ -102,6 +104,15 @@ def check_accuracy_maps(label_types=VALIDATOR_LABEL_TYPES, provenance_path=ACCUR
             raise RuntimeError(f"{path} was fitted for validator revision {prov.get('validator_revision')!r} but "
                                f"MODEL_MAP pins {entry.get('revision')!r} for {label_type}; refit the map for the "
                                f"pinned weights (and update {provenance_path}) before serving them")
+        m = accuracy_mappings[label_type]
+        for verdict in prov.get("hold_back", []):
+            if verdict not in m:
+                raise RuntimeError(f"{provenance_path}: {label_type} holds back {verdict!r}, which is not a verdict in {path}")
+            top = max(m[verdict].values())
+            if top > HOLD_BACK_CAP:
+                raise RuntimeError(f"{path} {verdict} reaches {top} but {provenance_path} says that verdict is held "
+                                   f"back (cap {HOLD_BACK_CAP}): the map is not the capped one, refit it with "
+                                   f"--hold-back {verdict} or drop the hold-back from the provenance on purpose")
         m = accuracy_mappings[label_type]
         if set(m) != {"correct", "incorrect"}:
             raise RuntimeError(f"{path}: expected verdicts correct and incorrect, got {sorted(m)}")

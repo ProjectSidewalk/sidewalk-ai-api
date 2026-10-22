@@ -12,6 +12,7 @@ import json
 import re
 import runpy
 import sys
+import time
 import types
 from datetime import datetime
 
@@ -525,6 +526,99 @@ def test_check_accuracy_maps_rejects_a_map_fitted_for_another_revision(monkeypat
     other.write_text(json.dumps({"maps": {}}))
     with pytest.raises(RuntimeError, match="no entry for curbramp"):
         main.check_accuracy_maps(["curbramp"], provenance_path=str(other))
+
+
+def _scratch_maps(tmp_path, monkeypatch):
+    """A copy of accuracy_mappings/ (maps and provenance) under tmp_path, with cwd moved there, for tampering."""
+    scratch = tmp_path / "accuracy_mappings"
+    scratch.mkdir()
+    for t in main.VALIDATOR_LABEL_TYPES:
+        (scratch / f"{t}.json").write_bytes(open(f"accuracy_mappings/{t}.json", "rb").read())
+    (scratch / "provenance.json").write_bytes(open("accuracy_mappings/provenance.json", "rb").read())
+    monkeypatch.chdir(tmp_path)
+    return scratch
+
+
+def _rebind(scratch, label_type, monkeypatch):
+    """Point MODEL_MAP, provenance.json and main.accuracy_mappings at the (tampered) scratch map, as a committer
+    updating both hashes would."""
+    sha = model_map.accuracy_map_sha256(scratch / f"{label_type}.json")
+    monkeypatch.setitem(model_map.MODEL_MAP["validator_models"][label_type], "accuracy_map_sha256", sha)
+    prov = json.load(open(scratch / "provenance.json"))
+    prov["maps"][label_type]["sha256"] = sha
+    (scratch / "provenance.json").write_text(json.dumps(prov))
+    monkeypatch.setitem(main.accuracy_mappings, label_type, json.load(open(scratch / f"{label_type}.json")))
+
+
+def test_startup_refuses_an_uncapped_map_for_a_held_back_verdict(monkeypatch, tmp_path):
+    """provenance.json says incorrect is held back: a map whose incorrect values rise above the cap is refused at
+    startup even when both hashes were updated for it (the tests are not the only guard)."""
+    scratch = _scratch_maps(tmp_path, monkeypatch)
+    m = json.load(open(scratch / "crosswalk.json"))
+    m["incorrect"]["1.0"] = 0.9768                                   # the uncapped Crosswalk maximum
+    (scratch / "crosswalk.json").write_text(json.dumps(m, indent=4) + "\n")
+    _rebind(scratch, "crosswalk", monkeypatch)
+    with pytest.raises(RuntimeError, match="incorrect reaches 0.9768 but .* held back"):
+        main.check_accuracy_maps(["crosswalk"])
+    # exactly at the cap is fine; a hold-back of a verdict the map does not have is a provenance error
+    m["incorrect"]["1.0"] = model_map.HOLD_BACK_CAP
+    (scratch / "crosswalk.json").write_text(json.dumps(m, indent=4) + "\n")
+    _rebind(scratch, "crosswalk", monkeypatch)
+    main.check_accuracy_maps(["crosswalk"])
+    prov = json.load(open(scratch / "provenance.json"))
+    prov["maps"]["crosswalk"]["hold_back"] = ["unsure"]
+    (scratch / "provenance.json").write_text(json.dumps(prov))
+    with pytest.raises(RuntimeError, match="holds back 'unsure', which is not a verdict"):
+        main.check_accuracy_maps(["crosswalk"])
+
+
+def test_check_accuracy_maps_compares_the_provenance_sha_with_the_file(monkeypatch, tmp_path):
+    """Through the runtime branch: a provenance sha that is not the file's is refused even when MODEL_MAP's is."""
+    scratch = _scratch_maps(tmp_path, monkeypatch)
+    main.check_accuracy_maps()                                       # the committed set passes from the scratch copy
+    prov = json.load(open(scratch / "provenance.json"))
+    prov["maps"]["obstacle"]["sha256"] = "0" * 64
+    (scratch / "provenance.json").write_text(json.dumps(prov))
+    with pytest.raises(RuntimeError, match="obstacle sha256 0{64} is not accuracy_mappings/obstacle.json's"):
+        main.check_accuracy_maps(["obstacle"])
+
+
+def test_load_models_runs_the_map_check_first(monkeypatch):
+    """load_models() calls check_accuracy_maps() before importing any model code, on the real startup path."""
+    calls = []
+
+    class Stop(Exception):
+        pass
+
+    def record():
+        calls.append("checked")
+        raise Stop()                                                 # so no model module is imported afterwards
+
+    monkeypatch.setattr(main, "check_accuracy_maps", record)
+    monkeypatch.setattr(main.torch.cuda, "is_available", lambda: True)
+    with pytest.raises(Stop):
+        main.load_models()
+    assert calls == ["checked"]
+    monkeypatch.setattr(main.torch.cuda, "is_available", lambda: False)
+    monkeypatch.delenv("SIDEWALK_ALLOW_CPU", raising=False)
+    with pytest.raises(SystemExit):                                  # no GPU: exits before the check, as documented
+        main.load_models()
+    assert calls == ["checked"]
+
+
+def test_webp_round_trip_time_is_counted_in_the_validator_stage(app_with, monkeypatch):
+    client, depth, set_pano = app_with
+    real = main.webp_round_trip
+
+    def slow(image, quality=95):
+        time.sleep(0.08)
+        return real(image, quality)
+
+    monkeypatch.setattr(main, "webp_round_trip", slow)
+    r = post(client)
+    assert r.status_code == 200
+    stage = dict(re.findall(r"(\w+);dur=(\d+)", r.headers["Server-Timing"]))
+    assert int(stage["validator"]) >= 80
 
 
 def test_check_accuracy_maps_rejects_a_swapped_or_broken_map(monkeypatch, tmp_path):
