@@ -4,10 +4,11 @@ from flask import Blueprint, Flask, current_app, g, request, jsonify
 from werkzeug.exceptions import BadRequest
 from PIL import Image
 from sidewalk_ai_api.panorama import Panorama
-from sidewalk_ai_api.model_map import MODEL_MAP
+from sidewalk_ai_api.model_map import HOLD_BACK_CAP, MODEL_MAP, accuracy_map_sha256
 from sidewalk_panorama_tools.geometry import label_view
 import cv2
 import hmac
+import io
 import json
 import logging
 import math
@@ -69,6 +70,60 @@ VALIDATOR_LABEL_TYPES = ["crosswalk", "curbramp", "obstacle", "surfaceproblem", 
 accuracy_mappings = {label_type: json.load(open(f"accuracy_mappings/{label_type}.json"))
                  for label_type in VALIDATOR_LABEL_TYPES}
 
+
+ACCURACY_MAPS_PROVENANCE = "accuracy_mappings/provenance.json"
+
+
+def check_accuracy_maps(label_types=VALIDATOR_LABEL_TYPES, provenance_path=ACCURACY_MAPS_PROVENANCE):
+    """Raises RuntimeError unless every accuracy map is the one fitted for the validator revision MODEL_MAP pins, and
+    is well formed: both verdicts, ascending confidence keys in [0.5, 1], non-decreasing accuracies in [0, 1].
+
+    Three things must agree per label type: the file's SHA-256, MODEL_MAP's ``accuracy_map_sha256``, and the
+    ``validator_revision`` + ``sha256`` recorded for that map in ``accuracy_mappings/provenance.json`` against the
+    pinned ``revision``; and every verdict the provenance lists under ``hold_back`` must stay at or below
+    HOLD_BACK_CAP in the map. Called by load_models(), so re-pinning other weights without refitting the map,
+    swapping a map, or shipping an uncapped map for a held-back verdict stops the process at startup instead of
+    serving an accuracy (or a Disagree vote) that was not decided.
+    """
+    with open(provenance_path) as f:
+        provenance = json.load(f).get("maps", {})
+    for label_type in label_types:
+        path = f"accuracy_mappings/{label_type}.json"
+        entry = MODEL_MAP["validator_models"][label_type]
+        want = entry.get("accuracy_map_sha256")
+        got = accuracy_map_sha256(path)
+        if got != want:
+            raise RuntimeError(f"{path} (sha256 {got}) is not the map MODEL_MAP binds to validator {label_type} "
+                               f"({want}); refit the map for these weights or fix accuracy_map_sha256")
+        prov = provenance.get(label_type)
+        if not prov:
+            raise RuntimeError(f"{provenance_path} has no entry for {label_type}")
+        if prov.get("sha256") != got:
+            raise RuntimeError(f"{provenance_path}: {label_type} sha256 {prov.get('sha256')} is not {path}'s {got}")
+        if prov.get("validator_revision") != entry.get("revision"):
+            raise RuntimeError(f"{path} was fitted for validator revision {prov.get('validator_revision')!r} but "
+                               f"MODEL_MAP pins {entry.get('revision')!r} for {label_type}; refit the map for the "
+                               f"pinned weights (and update {provenance_path}) before serving them")
+        m = accuracy_mappings[label_type]
+        for verdict in prov.get("hold_back", []):
+            if verdict not in m:
+                raise RuntimeError(f"{provenance_path}: {label_type} holds back {verdict!r}, which is not a verdict in {path}")
+            top = max(m[verdict].values())
+            if top > HOLD_BACK_CAP:
+                raise RuntimeError(f"{path} {verdict} reaches {top} but {provenance_path} says that verdict is held "
+                                   f"back (cap {HOLD_BACK_CAP}): the map is not the capped one, refit it with "
+                                   f"--hold-back {verdict} or drop the hold-back from the provenance on purpose")
+        m = accuracy_mappings[label_type]
+        if set(m) != {"correct", "incorrect"}:
+            raise RuntimeError(f"{path}: expected verdicts correct and incorrect, got {sorted(m)}")
+        for verdict, table in m.items():
+            keys = [float(k) for k in table]
+            values = list(table.values())
+            if keys != sorted(keys) or keys[0] != 0.5 or keys[-1] != 1.0:
+                raise RuntimeError(f"{path} {verdict}: thresholds must ascend from 0.5 to 1.0")
+            if any(not 0.0 <= v <= 1.0 for v in values) or any(b < a for a, b in zip(values, values[1:])):
+                raise RuntimeError(f"{path} {verdict}: accuracies must be non-decreasing in [0, 1]")
+
 with open('API_VERSION', 'r') as file:
     API_VERSION = file.read().strip()
 
@@ -84,6 +139,7 @@ def load_models():
         print("No GPU found. Check the GPU driver and that the container was started with --gpus all, "
               "or set SIDEWALK_ALLOW_CPU=1 to run on the CPU.", file=sys.stderr)
         sys.exit(3)
+    check_accuracy_maps()
     # Imported here, not at the top, so tests can import this module without transformers or the submodule.
     from sidewalk_ai_api.tagger import ImageTagger
     from sidewalk_ai_api.validator import ImageValidator
@@ -177,6 +233,20 @@ def parse_tilt_fields():
     return camera_pitch, camera_roll, tilt_beta, coord_frame
 
 
+# The WebP quality the training crops were written with (sidewalk-validator-ai data_generation.save_webp).
+WEBP_QUALITY = 95
+
+
+def webp_round_trip(image, quality=WEBP_QUALITY):
+    """`image` (PIL, RGB) encoded as WebP at `quality` and decoded again, as every training crop was.
+
+    Example: webp_round_trip(Image.fromarray(crop)) -> a new RGB PIL image with WebP's lossy changes applied.
+    """
+    buf = io.BytesIO()
+    image.save(buf, format="WEBP", quality=quality)
+    return Image.open(io.BytesIO(buf.getvalue())).convert("RGB")
+
+
 @api.route("/process", methods=["POST"])
 def process():
     models = current_app.config["MODELS"]
@@ -227,8 +297,13 @@ def process():
     center_x, center_y = perspective_image.shape[1] // 2, perspective_image.shape[0] // 2
     img_h, img_w = perspective_image.shape[:2]
 
-    inv_depth = 1 / depth[center_y, center_x]
-    crop_size_half = int(inv_depth * 6100)
+    # Half-size of the crop around the label, in pixels: 6100 / depth in metres, so closer features get larger
+    # crops. Computed in float64 as training's data_generation.py does; int(float32(1 / d) * 6100) differs for about
+    # one label in 90,000 (sidewalk-validator-ai docs/serving-parity-2026-10.md).
+    depth_at_label = float(depth[center_y, center_x])
+    if not math.isfinite(depth_at_label) or depth_at_label <= 0:   # training's depth_sized_crop raises the same way
+        raise InvalidField(f"bad depth {depth_at_label} at the label: cannot size the crop")
+    crop_size_half = int(6100 / depth_at_label)
 
     start_x = max(0, center_x - crop_size_half)
     start_y = max(0, center_y - crop_size_half)
@@ -274,7 +349,12 @@ def process():
     validator = models.validators[label_type]
     try:
         with timed("validator"):
-            validation_result, validation_confidence = validator.validate(perspective_image)
+            # The validators were trained on crops saved as quality-95 WebP (sidewalk-validator-ai
+            # data_generation.save_webp), so they get the same lossy round trip here, in memory (~70 ms, counted in
+            # this stage); on raw crops p(incorrect) moved by up to 0.11. The taggers above keep the raw crop: their
+            # training data did not go through this pipeline.
+            validator_image = webp_round_trip(perspective_image)
+            validation_result, validation_confidence = validator.validate(validator_image)
 
         # Find the highest mapping that's less than or equal to the confidence
         accuracy = 0
