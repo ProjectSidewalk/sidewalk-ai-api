@@ -12,6 +12,6 @@ for entry in MODEL_MAP["tagger_models"].values():
     hf_hub_download(f"projectsidewalk/{entry['repo']}", f"{entry['model_id']}.pth", revision=entry["revision"])
 
 for entry in MODEL_MAP["validator_models"].values():
-    # Only the files transformers loads. The repos also hold ~2.4 GB of optimizer state from training.
+    # Only the files transformers loads (older revisions of these repos also hold ~2.4 GB of optimizer state).
     snapshot_download(f"projectsidewalk/{entry['model_id']}", revision=entry["revision"],
                       allow_patterns=["config.json", "preprocessor_config.json", "model.safetensors"])

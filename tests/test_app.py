@@ -456,13 +456,13 @@ def test_download_hf_models_refuses_a_placeholder_before_downloading(monkeypatch
     assert calls == []
 
 
-def test_model_map_entries_are_pinned_or_placeholder():
-    """Every entry is a 40-hex commit or the one placeholder (never a branch name); taggers are always pinned."""
+def test_model_map_entries_are_pinned():
+    """Every entry is a 40-hex commit (never a branch name or the placeholder). A new validator may carry
+    PLACEHOLDER_REVISION on a branch until it is published, but main must never be green with one."""
     for label_type, entry in model_map.MODEL_MAP["tagger_models"].items():
         model_map.pinned_revision(entry, f"tagger {label_type}")
     for label_type, entry in model_map.MODEL_MAP["validator_models"].items():
-        if entry["revision"] != model_map.PLACEHOLDER_REVISION:
-            model_map.pinned_revision(entry, f"validator {label_type}")
+        model_map.pinned_revision(entry, f"validator {label_type}")
         assert label_type in main.VALIDATOR_LABEL_TYPES
 
 

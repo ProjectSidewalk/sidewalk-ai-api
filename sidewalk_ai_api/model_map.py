@@ -36,7 +36,7 @@ def accuracy_map_sha256(path):
 def pinned_revision(entry, what="model"):
     """The 40-hex HuggingFace commit of a MODEL_MAP entry; RuntimeError naming the entry if it is a placeholder.
 
-    Example: pinned_revision(MODEL_MAP["validator_models"]["curbramp"], "validator curbramp") -> "969ad5a3..."
+    Example: pinned_revision(MODEL_MAP["validator_models"]["curbramp"], "validator curbramp") -> "6791a641..."
     """
     revision = str(entry.get("revision", ""))
     if revision == PLACEHOLDER_REVISION or not re.fullmatch(r"[0-9a-f]{40}", revision):
