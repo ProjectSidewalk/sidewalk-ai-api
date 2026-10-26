@@ -86,6 +86,43 @@ docker tag sidewalk-ai-api:<older-tag> sidewalk-ai-api
 
 Each build contains its own copy of every model, so rolling back also rolls back the models. Old builds take several GB each; delete ones you don't need with `docker rmi sidewalk-ai-api:<tag>`.
 
+## How production is deployed
+
+Written down 2026-10-26 after reading the server, because none of it was documented and the answer to "how do we ship
+a new version" was not obvious. Nothing here is secret; the key itself never goes in this repo or in a commit.
+
+- **Where it runs.** On the lab's GPU server. The server's Apache terminates HTTPS for
+  `sidewalk-ai-api.cs.washington.edu` and reverse-proxies every request to `127.0.0.1:60654`, the loopback port that
+  `./docker_start.sh` publishes. There is **no deploy webhook, CI job or cron**: the website stages' push-to-deploy
+  tooling does not cover this service. Every deploy is someone running the commands above on the server.
+- **Docker is rootless, per account.** The server has no system Docker daemon. Each account runs its own daemon
+  (`dockerd-rootless-setuptool.sh install`), so `docker ps` shows only your own containers, and **the production
+  container belongs to whichever account started it.** Only that account (or root) can stop or replace it. It comes
+  back after a reboot because `docker_start.sh` sets `--restart unless-stopped` and the account has
+  `loginctl enable-linger`. The NVIDIA runtime is already configured for rootless use on the server
+  (`no-cgroups = true`), so `--gpus all` works without root.
+- **What an account needs before it can deploy.**
+  1. Subordinate uid/gid ranges in `/etc/subuid` and `/etc/subgid` on the server. Rootless Docker refuses to start
+     without them, and only CSE IT (`support@cs.washington.edu`) can add them. As of 2026-10-26 one lab account has
+     them.
+  2. `dockerd-rootless-setuptool.sh install`, then `loginctl enable-linger` so the daemon and the container survive
+     logout and reboot.
+  3. A clone of this repo with its submodules, and `./download_models.sh` run once.
+  4. The API key in `~/.sidewalk-ai-api.env` (`chmod 600`), the same value the website stages hold as
+     `SIDEWALK_AI_API_KEY`. Get it from the current deployer in person, never through a chat or a ticket.
+- **Deploying a new version.** On the server, in your clone, on `main` (or the tag you mean to ship):
+  `git pull`, `./docker_build.sh`, `./docker_start.sh`. Expect one to two minutes of 502s while the models load; the
+  website's nightly sweep picks up anything that failed meanwhile. Then check `docker ps` and
+  `docker logs -f sidewalk-ai-api`, and read the new tag off `docker images sidewalk-ai-api` and write it down with
+  the deploy. Each response, and every row the website stores in `label_ai_assessment`, carries `api_version` and
+  the model revisions, so the database shows what is live without touching the server.
+- **Handing production to another account.** Because the container is per-account, the current owner has to let go
+  first: `docker update --restart=no sidewalk-ai-api && docker stop -t 30 sidewalk-ai-api`, which frees port 60654.
+  The new owner then runs `./docker_build.sh && ./docker_start.sh`, and from then on their daemon owns production.
+  Do this during the day, not during the nightly sweep.
+- **Testing first.** `./docker_build.sh dev && ./docker_start.sh dev` runs a second instance beside production (it
+  needs its own ~9-10 GB of VRAM, so check `nvidia-smi` first); `regression/compare.py` compares the two.
+
   
 
 ## Try an example
