@@ -1,5 +1,5 @@
 {
-  "_about": "Binds each accuracy map to the validator revision it was fitted for. main.check_accuracy_maps() refuses to start unless, for every label type, validator_revision equals MODEL_MAP's pinned revision and sha256 equals both the file and MODEL_MAP's accuracy_map_sha256. Refit the map and update this file when the revision changes.",
+  "_about": "Binds each accuracy map to the validator revision it was fitted for. main.check_accuracy_maps() refuses to start unless, for every label type, validator_revision, model_id and training_date equal MODEL_MAP's pinned entry and sha256 equals the file, MODEL_MAP's accuracy_map_sha256 and confidence_precision_map.json at the pinned HuggingFace revision. Refit the map and update this file when the revision changes.",
   "fitted_by": "sidewalk-validator-ai calibration/calibrate.py --hold-back incorrect at c1676d2 (PR #57; its next commit a086ce4 made --hold-back-reason required and changed no map-building line, so the map bytes are those of the merged PR), fit split val, eval split test, deployment_priors.json measured 2026-10-20",
   "maps": {
     "crosswalk": {

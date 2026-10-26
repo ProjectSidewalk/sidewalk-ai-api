@@ -11,6 +11,7 @@ reaches the website's 0.92 gate): the deployment prior the maps were fitted unde
 (sidewalk-validator-ai#56) and the revision has no production outcomes yet.
 """
 import hashlib
+import os
 import re
 
 # Marker for a model whose HuggingFace upload does not exist yet; pinned_revision() refuses it. A new validator gets
@@ -20,6 +21,10 @@ PLACEHOLDER_REVISION = "TODO(jon): pin revision after publish"
 # Every validator entry also carries ``accuracy_map_sha256``: the SHA-256 of ``accuracy_mappings/<label_type>.json``
 # it is calibrated for. A map is only meaningful for the weights it was fitted on, so the two are bound here and
 # checked at startup (main.check_accuracy_maps) and by the tests. A new model version or a refitted map changes both.
+# The authority for that hash is the validator's own HuggingFace commit, which holds the map it was published with as
+# HUB_ACCURACY_MAP: the image build (download_hf_models.py) and startup both require the two to match, so a map can
+# only be served with the weights whose upload carries it, however consistently the in-repo files are edited.
+HUB_ACCURACY_MAP = "confidence_precision_map.json"
 
 
 # The value a held-back verdict's map is capped at (sidewalk-validator-ai calibration/_isotonic_map.HOLD_BACK_CAP):
@@ -31,6 +36,18 @@ def accuracy_map_sha256(path):
     """SHA-256 hex digest of a map file, as recorded in MODEL_MAP's ``accuracy_map_sha256``."""
     with open(path, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
+
+
+def check_hub_accuracy_map(path, entry, what="validator"):
+    """RuntimeError unless the HUB_ACCURACY_MAP at ``path`` (downloaded at the entry's pinned revision) has the
+    entry's ``accuracy_map_sha256``: the map the weights were published with is the one MODEL_MAP binds to them."""
+    if not os.path.isfile(path):
+        raise RuntimeError(f"{what} ({entry.get('model_id')}): revision {entry.get('revision')} has no {HUB_ACCURACY_MAP}")
+    got = accuracy_map_sha256(path)
+    if got != entry.get("accuracy_map_sha256"):
+        raise RuntimeError(f"{what} ({entry.get('model_id')}): {HUB_ACCURACY_MAP} at revision {entry.get('revision')} "
+                           f"has sha256 {got}, not MODEL_MAP's accuracy_map_sha256 {entry.get('accuracy_map_sha256')}; "
+                           "the pinned weights were published with another map (refit, or pin the right revision)")
 
 
 def pinned_revision(entry, what="model"):
