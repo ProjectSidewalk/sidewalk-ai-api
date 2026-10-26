@@ -658,31 +658,46 @@ def test_startup_refuses_provenance_metadata_drift(monkeypatch, tmp_path, field,
         main.check_accuracy_maps(["crosswalk"])
 
 
-def _run_download(monkeypatch, tmp_path, fake_hub):
-    """Runs download_hf_models.py against a stand-in snapshot_download that writes what the stand-in hub holds at each
-    revision; returns the allow_patterns it was asked for, per repo."""
-    asked = {}
+@pytest.mark.parametrize("field", ["training_date", "model_id"])
+def test_startup_refuses_a_provenance_entry_missing_metadata(monkeypatch, tmp_path, field):
+    """An absent training_date or model_id is refused like a wrong one, not skipped."""
+    scratch = _scratch_maps(tmp_path, monkeypatch)
+    prov = json.load(open(scratch / "provenance.json"))
+    del prov["maps"]["crosswalk"][field]
+    (scratch / "provenance.json").write_text(json.dumps(prov))
+    with pytest.raises(RuntimeError, match=f"crosswalk {field} None is not MODEL_MAP's"):
+        main.check_accuracy_maps(["crosswalk"])
+
+
+def _run_download(monkeypatch, tmp_path, fake_hub, calls=None):
+    """Runs download_hf_models.py against stand-in downloads (snapshot_download writes what the stand-in hub holds at
+    each revision); appends every call, in order, to ``calls`` as (function, repo, allow_patterns or filename)."""
+    calls = [] if calls is None else calls
 
     def snapshot_download(repo_id, revision=None, allow_patterns=None):
-        asked[repo_id] = allow_patterns
+        calls.append(("snapshot_download", repo_id, allow_patterns))
         folder = tmp_path / "snapshots" / repo_id / revision
         folder.mkdir(parents=True, exist_ok=True)
         if model_map.HUB_ACCURACY_MAP in allow_patterns and (repo_id, revision) in fake_hub.maps:
             (folder / model_map.HUB_ACCURACY_MAP).write_bytes(fake_hub.maps[(repo_id, revision)])
         return str(folder)
 
+    def hf_hub_download(repo_id, filename, revision=None):
+        calls.append(("hf_hub_download", repo_id, filename))
+
     monkeypatch.setitem(sys.modules, "huggingface_hub",
-                        types.SimpleNamespace(hf_hub_download=lambda *a, **k: None, snapshot_download=snapshot_download))
+                        types.SimpleNamespace(hf_hub_download=hf_hub_download, snapshot_download=snapshot_download))
     runpy.run_path("download_hf_models.py", run_name="__main__")
-    return asked
+    return calls
 
 
 def test_download_hf_models_checks_the_hub_map(monkeypatch, tmp_path, fake_hub):
-    """The image build downloads each validator's hub map with its weights and fails unless its sha256 is MODEL_MAP's:
-    a map hash swapped between two entries, or a revision with no map, stops the build."""
-    asked = _run_download(monkeypatch, tmp_path, fake_hub)
-    assert len(asked) == len(main.VALIDATOR_LABEL_TYPES)
-    assert all(model_map.HUB_ACCURACY_MAP in patterns for patterns in asked.values())
+    """The image build downloads each validator's hub map and fails unless its sha256 is MODEL_MAP's: a map hash
+    swapped between two entries, or a revision with no map, stops the build."""
+    calls = _run_download(monkeypatch, tmp_path, fake_hub)
+    n = len(main.VALIDATOR_LABEL_TYPES)
+    assert [c[2] for c in calls[:n]] == [[model_map.HUB_ACCURACY_MAP]] * n         # every map, before any weights
+    assert len(calls) == 2 * n + len(model_map.MODEL_MAP["tagger_models"])
     vm = model_map.MODEL_MAP["validator_models"]
     cw, cr = vm["crosswalk"]["accuracy_map_sha256"], vm["curbramp"]["accuracy_map_sha256"]
     monkeypatch.setitem(vm["crosswalk"], "accuracy_map_sha256", cr)
@@ -694,6 +709,29 @@ def test_download_hf_models_checks_the_hub_map(monkeypatch, tmp_path, fake_hub):
     monkeypatch.setitem(vm["crosswalk"], "revision", OLD_CROSSWALK["revision"])
     with pytest.raises(RuntimeError, match=f"revision {OLD_CROSSWALK['revision']} has no confidence_precision_map.json"):
         _run_download(monkeypatch, tmp_path, fake_hub)
+
+
+def test_download_hf_models_checks_every_map_before_any_weights(monkeypatch, tmp_path, fake_hub):
+    """A mismatch on the last validator stops the build before a single tagger or validator weight is requested."""
+    last = list(model_map.MODEL_MAP["validator_models"])[-1]
+    monkeypatch.setitem(model_map.MODEL_MAP["validator_models"][last], "accuracy_map_sha256", "0" * 64)
+    calls = []
+    with pytest.raises(RuntimeError, match=f"validator_models {last} .* not MODEL_MAP's"):
+        _run_download(monkeypatch, tmp_path, fake_hub, calls)
+    assert len(calls) == len(main.VALIDATOR_LABEL_TYPES)
+    assert all(c[0] == "snapshot_download" and c[2] == [model_map.HUB_ACCURACY_MAP] for c in calls)
+
+
+def test_live_hub_check_script(fake_hub, capsys):
+    """regression/check_hub_maps.py (run by hand against the real hub) passes on the committed set and names a
+    validator whose hub map is not what MODEL_MAP, the map file and the record say; here against the stand-in hub."""
+    with pytest.raises(SystemExit) as done:
+        runpy.run_path("regression/check_hub_maps.py", run_name="__main__")
+    assert done.value.code == 0 and capsys.readouterr().out.count("ok ") == len(main.VALIDATOR_LABEL_TYPES)
+    fake_hub.maps[_hub_key("obstacle")] = b"{}"                      # the hub holds another map than all three say
+    with pytest.raises(SystemExit) as done:
+        runpy.run_path("regression/check_hub_maps.py", run_name="__main__")
+    assert done.value.code == 1 and "FAIL obstacle" in capsys.readouterr().err
 
 
 def test_load_models_runs_the_map_check_first(monkeypatch):

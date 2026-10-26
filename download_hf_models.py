@@ -10,13 +10,17 @@ for kind in ("tagger_models", "validator_models"):
     for label_type, entry in MODEL_MAP[kind].items():
         pinned_revision(entry, f"{kind} {label_type}")
 
+# Then every validator's accuracy map, before any weights: the map the weights were published with must be the one
+# MODEL_MAP binds to them (startup checks it again from the cache, main.check_accuracy_maps).
+for label_type, entry in MODEL_MAP["validator_models"].items():
+    folder = snapshot_download(f"projectsidewalk/{entry['model_id']}", revision=entry["revision"],
+                               allow_patterns=[HUB_ACCURACY_MAP])
+    check_hub_accuracy_map(os.path.join(folder, HUB_ACCURACY_MAP), entry, f"validator_models {label_type}")
+
 for entry in MODEL_MAP["tagger_models"].values():
     hf_hub_download(f"projectsidewalk/{entry['repo']}", f"{entry['model_id']}.pth", revision=entry["revision"])
 
-for label_type, entry in MODEL_MAP["validator_models"].items():
-    # Only the files transformers loads (older revisions of these repos also hold ~2.4 GB of optimizer state), plus the
-    # accuracy map the weights were published with, which startup checks again from the cache (main.check_accuracy_maps).
-    folder = snapshot_download(f"projectsidewalk/{entry['model_id']}", revision=entry["revision"],
-                               allow_patterns=["config.json", "preprocessor_config.json", "model.safetensors",
-                                               HUB_ACCURACY_MAP])
-    check_hub_accuracy_map(os.path.join(folder, HUB_ACCURACY_MAP), entry, f"validator_models {label_type}")
+for entry in MODEL_MAP["validator_models"].values():
+    # Only the files transformers loads (older revisions of these repos also hold ~2.4 GB of optimizer state).
+    snapshot_download(f"projectsidewalk/{entry['model_id']}", revision=entry["revision"],
+                      allow_patterns=["config.json", "preprocessor_config.json", "model.safetensors"])

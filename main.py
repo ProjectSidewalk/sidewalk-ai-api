@@ -102,7 +102,7 @@ def check_accuracy_maps(label_types=VALIDATOR_LABEL_TYPES, provenance_path=ACCUR
 
     The hub map comes from hf_hub_download at the pinned commit, which returns the cached copy without contacting
     HuggingFace when there is one. In the container (HF_HUB_OFFLINE=1) it is the copy the image build downloaded and
-    checked, and a missing one is a startup error; outside it, the map downloads like the weights do (a 10 KB file,
+    checked, and a missing one is a startup error; outside it, the map downloads like the weights do (an ~11 KB file,
     just before the weights themselves). The tests stub huggingface_hub (tests/conftest.py).
     """
     with open(provenance_path) as f:
