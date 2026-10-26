@@ -1,9 +1,10 @@
 """Which model weights the API serves: one HuggingFace repo and commit per model.
 
 The validator entries are for the October 2026 retrain (sidewalk-validator-ai round 3: panorama-grouped split,
-tilt-corrected label-centred crops, ViT-B depth sizing, q95 WebP crops). Their repos are not published yet, so each
-``revision`` is PLACEHOLDER_REVISION, and ``pinned_revision()`` refuses to load such an entry: a build with an unpinned
-model fails at image build (download_hf_models.py) or at startup instead of silently serving the old weights.
+tilt-corrected label-centred crops, ViT-B depth sizing, q95 WebP crops), each pinned to its 2026-10-26 HuggingFace
+upload (publish_to_hf.py in sidewalk-validator-ai). ``pinned_revision()`` refuses an entry whose ``revision`` is
+PLACEHOLDER_REVISION or not a 40-hex commit: a build with an unpinned model fails at image build
+(download_hf_models.py) or at startup instead of silently serving a repo's HEAD.
 
 Their accuracy maps ship with the ``incorrect`` verdict held back (capped at HOLD_BACK_CAP, so a Disagree never
 reaches the website's 0.92 gate): the deployment prior the maps were fitted under is under review
@@ -12,8 +13,8 @@ reaches the website's 0.92 gate): the deployment prior the maps were fitted unde
 import hashlib
 import re
 
-# TODO(jon): pin revision after publish. Replace every PLACEHOLDER_REVISION below with the HuggingFace commit of the
-# round-3 upload (publish_to_hf.py in sidewalk-validator-ai), one per label type, and confirm training_date.
+# Marker for a model whose HuggingFace upload does not exist yet; pinned_revision() refuses it. A new validator gets
+# this until it is published, then the upload's commit (and the same commit in accuracy_mappings/provenance.json).
 PLACEHOLDER_REVISION = "TODO(jon): pin revision after publish"
 
 # Every validator entry also carries ``accuracy_map_sha256``: the SHA-256 of ``accuracy_mappings/<label_type>.json``
@@ -75,31 +76,31 @@ MODEL_MAP = {
         "crosswalk": {
             "model_id": "sidewalk-validator-ai-crosswalk",
             "training_date": "10-21-2026",
-            "revision": PLACEHOLDER_REVISION,
+            "revision": "b8498b82ebeb6a4b69bfa1c2a1193a868fc97810",
             "accuracy_map_sha256": "8375e72eaffca87a2b7479c42b29e08df45fec020fa6688e1424447197e5febb"
         },
         "curbramp": {
             "model_id": "sidewalk-validator-ai-curbramp",
             "training_date": "10-21-2026",
-            "revision": PLACEHOLDER_REVISION,
+            "revision": "6791a64185caa5e99c8b65a9bd5f05a73961d919",
             "accuracy_map_sha256": "e097f568a71aae6be073629843031028c6d39b9342c396b4ab81827af0ca2ece"
         },
         "obstacle": {
             "model_id": "sidewalk-validator-ai-obstacle",
             "training_date": "10-21-2026",
-            "revision": PLACEHOLDER_REVISION,
+            "revision": "64b082c06cb7bef1943e35d707381e777793ad98",
             "accuracy_map_sha256": "b76b567a9d83b8ba03478403e53c9f64556fa86f455d703288756a2fa9e1644f"
         },
         "surfaceproblem": {
             "model_id": "sidewalk-validator-ai-surfaceproblem",
             "training_date": "10-21-2026",
-            "revision": PLACEHOLDER_REVISION,
+            "revision": "b5497b7111e5216b97697fda410d3f62d933a748",
             "accuracy_map_sha256": "fa4eeec29dbcd164b1d08b43dcb877ef9b86ae19822f9b7bcf8971412742c49e"
         },
         "nocurbramp": {
             "model_id": "sidewalk-validator-ai-nocurbramp",
             "training_date": "10-21-2026",
-            "revision": PLACEHOLDER_REVISION,
+            "revision": "ca7167d9ae145e10db9eaef64b425f2abad40d8a",
             "accuracy_map_sha256": "8dc1f8309df13041bb6e027b720d41a2e0baa9491fb4e123c5e45c584dafbf26"
         }
     }
