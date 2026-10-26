@@ -74,7 +74,7 @@ To test changes next to the production instance, build and start with `dev`. Thi
 
 ```
 
-To redeploy prod, pull and run `./docker_build.sh && ./docker_start.sh` (about a minute or two of downtime while the models load). Each build is also tagged with its version, build time, and commit, e.g. `sidewalk-ai-api:1.0.1-2026-10-14-1803-5a9487c`. To roll back to an older build:
+To redeploy prod, pull and run `./docker_build.sh && ./docker_start.sh` (about a minute or two of downtime while the models load; see [How production is deployed](#how-production-is-deployed) for the full procedure and the first-time setup). Each build is also tagged with its version, build time, and commit, e.g. `sidewalk-ai-api:1.0.1-2026-10-14-1803-5a9487c`. To roll back to an older build:
 
 ```bash
 
@@ -85,6 +85,77 @@ docker tag sidewalk-ai-api:<older-tag> sidewalk-ai-api
 ```
 
 Each build contains its own copy of every model, so rolling back also rolls back the models. Old builds take several GB each; delete ones you don't need with `docker rmi sidewalk-ai-api:<tag>`.
+
+## How production is deployed
+
+Last checked against the server 2026-10-26. Nothing here is secret; the key itself never goes in this repo or in a
+commit.
+
+- **Where it runs.** On the lab's GPU server. The server's Apache terminates HTTPS for
+  `sidewalk-ai-api.cs.washington.edu` and reverse-proxies every request to `127.0.0.1:60654`, the loopback port that
+  `./docker_start.sh` publishes. There is **no deploy webhook, CI job or cron**: the website stages' push-to-deploy
+  tooling does not cover this service. Every deploy is someone running the commands above on the server.
+- **Docker is rootless, per account.** The server has no system Docker daemon. Each account runs its own daemon
+  (`dockerd-rootless-setuptool.sh install`), so `docker ps` shows only your own containers, and **the production
+  container belongs to whichever account started it.** Only that account (or root) can stop or replace it. It comes
+  back after a reboot because `docker_start.sh` sets `--restart unless-stopped` and the account has
+  `loginctl enable-linger`. The NVIDIA runtime is already configured for rootless use on the server
+  (`no-cgroups = true`), so `--gpus all` works without root.
+- **What an account needs before it can deploy** (first-time setup, once per account; consolidated from a lab
+  member's setup notes, 2026-10-26).
+  1. Subordinate uid/gid ranges in `/etc/subuid` and `/etc/subgid` on the server. Rootless Docker refuses to start
+     without them, and only CSE IT (`support@cs.washington.edu`) can add them, so ask for them before anything else.
+     If `dockerd-rootless-setuptool.sh install` fails, this is the usual reason.
+  2. Point the daemon's storage at the server's local pool before starting it. Rootless Docker defaults to
+     `~/.local/share/docker`, and home directories here are NFS with a quota, so the multi-GB images would fill it.
+     Make a directory `/m-make2/make2/<username>_docker` and write `~/.config/docker/daemon.json`:
+     ```json
+     {
+         "data-root": "/m-make2/make2/<username>_docker",
+         "runtimes": {
+             "nvidia": {
+                 "path": "/usr/bin/nvidia-container-runtime",
+                 "runtimeArgs": []
+             }
+         }
+     }
+     ```
+  3. `dockerd-rootless-setuptool.sh install` (the tool is already on the PATH on the server). If the installer
+     tells you to set `DOCKER_HOST` (or to use the `rootless` context), put that line in your shell rc, or the client
+     looks for the system socket that does not exist here and every `docker` command says "Cannot connect to the
+     Docker daemon" even though yours is running. Then `systemctl --user start docker.service` and `docker ps`; if
+     that lists (possibly zero) containers without an error, the daemon is up. Check that
+     `docker info | grep 'Storage Driver'` says `overlay2`: on ZFS an older kernel module falls back to `vfs`, which
+     stores a full copy of every layer and makes these multi-GB images several times larger.
+  4. `loginctl enable-linger` so the daemon and the container survive logout and reboot. If the container does not
+     come back after a reboot, that is what is missing; on this server it needs CSE IT (`sudo loginctl enable-linger
+     <username>`).
+  5. A clone of this repo with its submodules (`git clone --recursive`), on the local pool, e.g.
+     `/m-make2/make2/sidewalk-ai-api/`. The build downloads the models itself (`download_models.sh` runs inside the
+     Dockerfile), so nothing else is needed. Keep a second clone, e.g.
+     `/m-make2/make2/sidewalk-ai-api-dev/`, for testing branches, so the production clone always sits on `main`.
+  6. The API key in `~/.sidewalk-ai-api.env` (`chmod 600`), the same value the website stages hold as
+     `SIDEWALK_AI_API_KEY`. Get it from the current deployer in person, never through a chat or a ticket.
+- **Deploying a new version.** On the server, in your clone, on `main`: `git pull`, `./docker_build.sh`,
+  `./docker_start.sh`. To ship a specific tag instead, `git fetch --tags && git checkout <tag>` before the build.
+  Expect one to two minutes of 502s while the models load; a label whose call fails with a 502 is recorded on the
+  website side (`label_ai_failure`) rather than retried, so do this outside the website's nightly run (see the
+  deploy time in SidewalkWebpage's `docs/ai-subsystems.md`). Then check `docker ps` and
+  `docker logs -f sidewalk-ai-api`, and read the new tag off `docker images sidewalk-ai-api` and write it down with
+  the deploy. Each response, and every row the website stores in `label_ai_assessment`, carries `api_version` and
+  the model revisions, so the database shows what is live without touching the server.
+- **Handing production to another account.** Because the container is per-account, the two daemons cannot both
+  bind port 60654, so the swap is: the new owner finishes setup steps 1-6 (their own key file included, or
+  `docker_start.sh` refuses to run) and runs `./docker_build.sh` so the image is ready; the current owner then runs
+  `docker update --restart=no sidewalk-ai-api && docker stop -t 30 sidewalk-ai-api`, which frees the port; the new
+  owner immediately runs `./docker_start.sh`, and from then on their daemon owns production. Downtime is the model
+  load, not the build. Do it in the daytime: a stopped container during the nightly run turns that night's calls
+  into `label_ai_failure` rows.
+- **Testing first (regression check before merging to `main`).** In the dev clone, check out the branch, then
+  `./docker_build.sh dev && ./docker_start.sh dev` runs a second instance beside production (it needs its own
+  ~9-10 GB of VRAM, so check `nvidia-smi` first). Then `python3 regression/compare.py` sends a fixed set of labels to
+  both instances and reports every output that changed (see the docstring for FAIL / DRIFT / same / SKIP and the
+  speed check). Remove the dev instance with `docker rm -f sidewalk-ai-api-dev` when done.
 
   
 
@@ -106,4 +177,4 @@ Likewise, `validation_result`, `validation_score`, and `validation_estimated_acc
 
 This is because we do not have models for other label types yet.
 
-**For a more detailed guide on using the API, please see [API_USAGE.md](https://github.com/ProjectSidewalk/sidewalk-ai-api/blob/main/docs/API_USAGE.md)** 
+**For a more detailed guide on using the API, please see [API_USAGE.md](https://github.com/ProjectSidewalk/sidewalk-ai-api/blob/main/docs/API_USAGE.md)**
