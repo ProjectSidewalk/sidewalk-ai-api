@@ -1,0 +1,34 @@
+{
+  "file": "parity_expected.csv",
+  "source": "ProjectSidewalk/sidewalk-validator-ai docs/serving-parity-2026-10/expected_process.csv at 073e755 (analysis/serving_parity.py expected), expected_accuracy and validator_revision columns added here",
+  "generated_on": {
+    "date": "2026-10-21",
+    "machine": "arm64",
+    "platform": "Darwin arm64 (macOS 15.5)",
+    "cpu": "Apple M1 Max",
+    "cpu_flags": "NEON; no SSE/AVX. opencv's INTER_CUBIC resize is not bit-identical across CPU ISAs (arm64 vs x86_64 differ by one level on 2.5-4.2% of crop values, up to 0.05 in p), so these values are only exact on arm64.",
+    "device": "cpu",
+    "opencv": "4.12.0.88",
+    "pillow": "11.3.0 (training side) / 12.3.0 (API side); q95 WebP bytes identical on both",
+    "torch": "2.7.1 (training side) / 2.14.1 (API side)",
+    "transformers": "4.55.0 / 5.20.0",
+    "sidewalk_ai_api_head": "174a1698d8c52bae1749c230162440b4da279da9 (crop code; values reproduced within 3e-6 by this branch at c6bf89d on arm64)",
+    "panorama_sha256": "3a85e22b22b994986560f45e923c6ad42ec3e62e95a0131da278dc0b69b69706",
+    "depth_checkpoint_sha256": "4dad67a7cc10b462bca48e6b8569c762b8eb3c1adada170a3851a6d3ba37bb3e"
+  },
+  "validator_revisions": {
+    "crosswalk": "b7936e5bd17a4b96db301f954e5d3a5fe9eaf361",
+    "curbramp": "969ad5a33079db7885c9e9a4eb5cd0f39d8fe57a",
+    "obstacle": "8f0fe8fc48748fac35098e74c1848d015126deef",
+    "surfaceproblem": "0e1439daa5667c8a81f63e75f835bd51221df4c2",
+    "nocurbramp": "9f3f3bb2f40864a468fb65e43644ee5ba54e3e19"
+  },
+  "accuracy_mappings_sha256": {
+    "crosswalk": "139fbc9837c804545f4311aa2a4582f75ae9117d518c740fe36848ed9f637aa8",
+    "curbramp": "3a95411373532de96ee7169b9a1706d7e7ee1add61961bfff6ad9163f1c9d43d",
+    "obstacle": "5aecb0cc3b9949a9efba2359226047390329ac457631b246634cfeaa02218369",
+    "surfaceproblem": "568f15cd8676b048fef3b207559cbc4008ddfb9b70b04ce26086192092b3f033",
+    "nocurbramp": "0047d0790000bc86aee008d9af223d4c1d010cfe48db2050f091305d70c030b1"
+  },
+  "regenerate": "On the server's own ISA (x86_64, makelab2 or klone): check out sidewalk-validator-ai, run `python analysis/serving_parity.py expected --api-dir <this checkout>` with the pinned revisions, fill expected_accuracy from this checkout's accuracy_mappings/ (regression/parity_smoke.py lookup_accuracy) and validator_revision from model_map.py, then rewrite this file's generated_on block from that machine."
+}
