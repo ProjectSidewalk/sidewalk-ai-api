@@ -101,14 +101,35 @@ a new version" was not obvious. Nothing here is secret; the key itself never goe
   back after a reboot because `docker_start.sh` sets `--restart unless-stopped` and the account has
   `loginctl enable-linger`. The NVIDIA runtime is already configured for rootless use on the server
   (`no-cgroups = true`), so `--gpus all` works without root.
-- **What an account needs before it can deploy.**
+- **What an account needs before it can deploy** (first-time setup, once per account; consolidated from a lab
+  member's setup notes, 2026-10-26).
   1. Subordinate uid/gid ranges in `/etc/subuid` and `/etc/subgid` on the server. Rootless Docker refuses to start
      without them, and only CSE IT (`support@cs.washington.edu`) can add them. As of 2026-10-26 one lab account has
-     them.
-  2. `dockerd-rootless-setuptool.sh install`, then `loginctl enable-linger` so the daemon and the container survive
-     logout and reboot.
-  3. A clone of this repo with its submodules, and `./download_models.sh` run once.
-  4. The API key in `~/.sidewalk-ai-api.env` (`chmod 600`), the same value the website stages hold as
+     them. If `dockerd-rootless-setuptool.sh install` fails, this is the usual reason; ask CSE IT.
+  2. Point the daemon's storage at the server's local pool before starting it. Rootless Docker defaults to
+     `~/.local/share/docker`, and home directories here are NFS with a quota, so the multi-GB images would fill it.
+     Make a directory `/m-make2/make2/<username>_docker` and write `~/.config/docker/daemon.json`:
+     ```json
+     {
+         "data-root": "/m-make2/make2/<username>_docker",
+         "runtimes": {
+             "nvidia": {
+                 "path": "/usr/bin/nvidia-container-runtime",
+                 "runtimeArgs": []
+             }
+         }
+     }
+     ```
+  3. `dockerd-rootless-setuptool.sh install` (the tool is already on the PATH on the server), then
+     `systemctl --user start docker.service`, then `docker ps`. If that does not say "Cannot connect to the Docker
+     daemon", the daemon is up.
+  4. `loginctl enable-linger` so the daemon and the container survive logout and reboot. If the container does not
+     come back after a reboot, that is what is missing; on this server it needs CSE IT (`sudo loginctl enable-linger
+     <username>`).
+  5. A clone of this repo with its submodules (`git clone --recursive`), on the local pool, e.g.
+     `/m-make2/make2/sidewalk-ai-api/`, and `./download_models.sh` run once. Keep a second clone, e.g.
+     `/m-make2/make2/sidewalk-ai-api-dev/`, for testing branches, so the production clone always sits on `main`.
+  6. The API key in `~/.sidewalk-ai-api.env` (`chmod 600`), the same value the website stages hold as
      `SIDEWALK_AI_API_KEY`. Get it from the current deployer in person, never through a chat or a ticket.
 - **Deploying a new version.** On the server, in your clone, on `main` (or the tag you mean to ship):
   `git pull`, `./docker_build.sh`, `./docker_start.sh`. Expect one to two minutes of 502s while the models load; the
@@ -120,8 +141,11 @@ a new version" was not obvious. Nothing here is secret; the key itself never goe
   first: `docker update --restart=no sidewalk-ai-api && docker stop -t 30 sidewalk-ai-api`, which frees port 60654.
   The new owner then runs `./docker_build.sh && ./docker_start.sh`, and from then on their daemon owns production.
   Do this during the day, not during the nightly sweep.
-- **Testing first.** `./docker_build.sh dev && ./docker_start.sh dev` runs a second instance beside production (it
-  needs its own ~9-10 GB of VRAM, so check `nvidia-smi` first); `regression/compare.py` compares the two.
+- **Testing first (regression check before merging to `main`).** In the dev clone, check out the branch, then
+  `./docker_build.sh dev && ./docker_start.sh dev` runs a second instance beside production (it needs its own
+  ~9-10 GB of VRAM, so check `nvidia-smi` first). Then `python3 regression/compare.py` sends a fixed set of labels to
+  both instances and reports every output that changed (see the docstring for FAIL / DRIFT / same / SKIP and the
+  speed check). Remove the dev instance with `docker rm -f sidewalk-ai-api-dev` when done.
 
   
 
@@ -143,4 +167,4 @@ Likewise, `validation_result`, `validation_score`, and `validation_estimated_acc
 
 This is because we do not have models for other label types yet.
 
-**For a more detailed guide on using the API, please see [API_USAGE.md](https://github.com/ProjectSidewalk/sidewalk-ai-api/blob/main/docs/API_USAGE.md)** 
+**For a more detailed guide on using the API, please see [API_USAGE.md](https://github.com/ProjectSidewalk/sidewalk-ai-api/blob/main/docs/API_USAGE.md)**
