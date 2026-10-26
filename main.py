@@ -105,15 +105,6 @@ def check_accuracy_maps(label_types=VALIDATOR_LABEL_TYPES, provenance_path=ACCUR
                                f"MODEL_MAP pins {entry.get('revision')!r} for {label_type}; refit the map for the "
                                f"pinned weights (and update {provenance_path}) before serving them")
         m = accuracy_mappings[label_type]
-        for verdict in prov.get("hold_back", []):
-            if verdict not in m:
-                raise RuntimeError(f"{provenance_path}: {label_type} holds back {verdict!r}, which is not a verdict in {path}")
-            top = max(m[verdict].values())
-            if top > HOLD_BACK_CAP:
-                raise RuntimeError(f"{path} {verdict} reaches {top} but {provenance_path} says that verdict is held "
-                                   f"back (cap {HOLD_BACK_CAP}): the map is not the capped one, refit it with "
-                                   f"--hold-back {verdict} or drop the hold-back from the provenance on purpose")
-        m = accuracy_mappings[label_type]
         if set(m) != {"correct", "incorrect"}:
             raise RuntimeError(f"{path}: expected verdicts correct and incorrect, got {sorted(m)}")
         for verdict, table in m.items():
@@ -123,6 +114,15 @@ def check_accuracy_maps(label_types=VALIDATOR_LABEL_TYPES, provenance_path=ACCUR
                 raise RuntimeError(f"{path} {verdict}: thresholds must ascend from 0.5 to 1.0")
             if any(not 0.0 <= v <= 1.0 for v in values) or any(b < a for a, b in zip(values, values[1:])):
                 raise RuntimeError(f"{path} {verdict}: accuracies must be non-decreasing in [0, 1]")
+        # After the structural checks, so a malformed map is reported as such rather than as a TypeError here.
+        for verdict in prov.get("hold_back", []):
+            if verdict not in m:
+                raise RuntimeError(f"{provenance_path}: {label_type} holds back {verdict!r}, which is not a verdict in {path}")
+            top = max(m[verdict].values())
+            if top > HOLD_BACK_CAP:
+                raise RuntimeError(f"{path} {verdict} reaches {top} but {provenance_path} says that verdict is held "
+                                   f"back (cap {HOLD_BACK_CAP}): the map is not the capped one, refit it with "
+                                   f"--hold-back {verdict} or drop the hold-back from the provenance on purpose")
 
 with open('API_VERSION', 'r') as file:
     API_VERSION = file.read().strip()

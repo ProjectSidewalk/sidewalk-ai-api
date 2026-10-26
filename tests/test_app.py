@@ -490,9 +490,12 @@ def test_image_source_values_are_the_websites_enum(app_with):
 def test_incorrect_maps_are_held_back():
     """Every incorrect map ships capped at HOLD_BACK_CAP until the deployment prior is settled and the revision has
     production outcomes (sidewalk-validator-ai#56): a map that could cast a Disagree must not land here by accident."""
+    provenance = json.load(open(main.ACCURACY_MAPS_PROVENANCE))["maps"]
     for label_type in main.VALIDATOR_LABEL_TYPES:
         table = main.accuracy_mappings[label_type]["incorrect"]
         assert max(table.values()) <= model_map.HOLD_BACK_CAP, label_type
+        # and the provenance says so, which is what makes the server enforce the cap at startup
+        assert "incorrect" in provenance[label_type]["hold_back"], label_type
     assert model_map.HOLD_BACK_CAP < 0.92
 
 
