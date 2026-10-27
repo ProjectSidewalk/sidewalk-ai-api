@@ -3,7 +3,7 @@
   "fitted_by": "sidewalk-validator-ai calibration/calibrate.py --hold-back incorrect at c1676d2 (PR #57; its next commit a086ce4 made --hold-back-reason required and changed no map-building line, so the map bytes are those of the merged PR), fit split val, eval split test, deployment_priors.json measured 2026-10-20",
   "maps": {
     "crosswalk": {
-      "validator_revision": "TODO(jon): pin revision after publish",
+      "validator_revision": "b8498b82ebeb6a4b69bfa1c2a1193a868fc97810",
       "sha256": "8375e72eaffca87a2b7479c42b29e08df45fec020fa6688e1424447197e5febb",
       "hold_back": [
         "incorrect"
@@ -12,7 +12,7 @@
       "training_date": "10-21-2026"
     },
     "curbramp": {
-      "validator_revision": "TODO(jon): pin revision after publish",
+      "validator_revision": "6791a64185caa5e99c8b65a9bd5f05a73961d919",
       "sha256": "e097f568a71aae6be073629843031028c6d39b9342c396b4ab81827af0ca2ece",
       "hold_back": [
         "incorrect"
@@ -21,7 +21,7 @@
       "training_date": "10-21-2026"
     },
     "obstacle": {
-      "validator_revision": "TODO(jon): pin revision after publish",
+      "validator_revision": "64b082c06cb7bef1943e35d707381e777793ad98",
       "sha256": "b76b567a9d83b8ba03478403e53c9f64556fa86f455d703288756a2fa9e1644f",
       "hold_back": [
         "incorrect"
@@ -30,7 +30,7 @@
       "training_date": "10-21-2026"
     },
     "surfaceproblem": {
-      "validator_revision": "TODO(jon): pin revision after publish",
+      "validator_revision": "b5497b7111e5216b97697fda410d3f62d933a748",
       "sha256": "fa4eeec29dbcd164b1d08b43dcb877ef9b86ae19822f9b7bcf8971412742c49e",
       "hold_back": [
         "incorrect"
@@ -39,7 +39,7 @@
       "training_date": "10-21-2026"
     },
     "nocurbramp": {
-      "validator_revision": "TODO(jon): pin revision after publish",
+      "validator_revision": "ca7167d9ae145e10db9eaef64b425f2abad40d8a",
       "sha256": "8dc1f8309df13041bb6e027b720d41a2e0baa9491fb4e123c5e45c584dafbf26",
       "hold_back": [
         "incorrect"
