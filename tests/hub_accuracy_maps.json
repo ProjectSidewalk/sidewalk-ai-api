@@ -1,0 +1,20 @@
+{
+  "_about": "The sha256 of confidence_precision_map.json at each pinned validator revision, as HuggingFace serves it (read 2026-10-26). tests/conftest.py's stand-in huggingface_hub serves the committed map with that hash, so the tests fail when MODEL_MAP and provenance.json are edited consistently but away from what the hub holds. Record a new revision's hash from the hub itself (hf_hub_download(repo, 'confidence_precision_map.json', revision=...)), never from accuracy_mappings/.",
+  "maps": {
+    "projectsidewalk/sidewalk-validator-ai-crosswalk": {
+      "b8498b82ebeb6a4b69bfa1c2a1193a868fc97810": "8375e72eaffca87a2b7479c42b29e08df45fec020fa6688e1424447197e5febb"
+    },
+    "projectsidewalk/sidewalk-validator-ai-curbramp": {
+      "6791a64185caa5e99c8b65a9bd5f05a73961d919": "e097f568a71aae6be073629843031028c6d39b9342c396b4ab81827af0ca2ece"
+    },
+    "projectsidewalk/sidewalk-validator-ai-obstacle": {
+      "64b082c06cb7bef1943e35d707381e777793ad98": "b76b567a9d83b8ba03478403e53c9f64556fa86f455d703288756a2fa9e1644f"
+    },
+    "projectsidewalk/sidewalk-validator-ai-surfaceproblem": {
+      "b5497b7111e5216b97697fda410d3f62d933a748": "fa4eeec29dbcd164b1d08b43dcb877ef9b86ae19822f9b7bcf8971412742c49e"
+    },
+    "projectsidewalk/sidewalk-validator-ai-nocurbramp": {
+      "ca7167d9ae145e10db9eaef64b425f2abad40d8a": "8dc1f8309df13041bb6e027b720d41a2e0baa9491fb4e123c5e45c584dafbf26"
+    }
+  }
+}

@@ -542,18 +542,21 @@ def _scratch_maps(tmp_path, monkeypatch):
     return scratch
 
 
-def _rebind(scratch, label_type, monkeypatch):
+def _rebind(scratch, label_type, monkeypatch, hub=None):
     """Point MODEL_MAP, provenance.json and main.accuracy_mappings at the (tampered) scratch map, as a committer
-    updating both hashes would."""
+    updating both hashes would; with ``hub``, also publish it at the pinned revision of the stand-in hub."""
     sha = model_map.accuracy_map_sha256(scratch / f"{label_type}.json")
-    monkeypatch.setitem(model_map.MODEL_MAP["validator_models"][label_type], "accuracy_map_sha256", sha)
+    entry = model_map.MODEL_MAP["validator_models"][label_type]
+    monkeypatch.setitem(entry, "accuracy_map_sha256", sha)
     prov = json.load(open(scratch / "provenance.json"))
     prov["maps"][label_type]["sha256"] = sha
     (scratch / "provenance.json").write_text(json.dumps(prov))
     monkeypatch.setitem(main.accuracy_mappings, label_type, json.load(open(scratch / f"{label_type}.json")))
+    if hub is not None:
+        hub.maps[(f"projectsidewalk/{entry['model_id']}", entry["revision"])] = (scratch / f"{label_type}.json").read_bytes()
 
 
-def test_startup_refuses_an_uncapped_map_for_a_held_back_verdict(monkeypatch, tmp_path):
+def test_startup_refuses_an_uncapped_map_for_a_held_back_verdict(monkeypatch, tmp_path, fake_hub):
     """provenance.json says incorrect is held back: a map whose incorrect values rise above the cap is refused at
     startup even when both hashes were updated for it (the tests are not the only guard)."""
     scratch = _scratch_maps(tmp_path, monkeypatch)
@@ -566,7 +569,7 @@ def test_startup_refuses_an_uncapped_map_for_a_held_back_verdict(monkeypatch, tm
     # exactly at the cap is fine; a hold-back of a verdict the map does not have is a provenance error
     m["incorrect"]["1.0"] = model_map.HOLD_BACK_CAP
     (scratch / "crosswalk.json").write_text(json.dumps(m, indent=4) + "\n")
-    _rebind(scratch, "crosswalk", monkeypatch)
+    _rebind(scratch, "crosswalk", monkeypatch, hub=fake_hub)
     main.check_accuracy_maps(["crosswalk"])
     prov = json.load(open(scratch / "provenance.json"))
     prov["maps"]["crosswalk"]["hold_back"] = ["unsure"]
@@ -584,6 +587,151 @@ def test_check_accuracy_maps_compares_the_provenance_sha_with_the_file(monkeypat
     (scratch / "provenance.json").write_text(json.dumps(prov))
     with pytest.raises(RuntimeError, match="obstacle sha256 0{64} is not accuracy_mappings/obstacle.json's"):
         main.check_accuracy_maps(["obstacle"])
+
+
+# --- the hub's confidence_precision_map.json is the authority for each map (sidewalk-ai-api#24) ------------------------
+
+OLD_CROSSWALK = {"revision": "b7936e5bd17a4b96db301f954e5d3a5fe9eaf361", "training_date": "08-16-2025"}  # 2025-08 pin
+
+
+def _hub_key(label_type):
+    entry = model_map.MODEL_MAP["validator_models"][label_type]
+    return f"projectsidewalk/{entry['model_id']}", entry["revision"]
+
+
+def test_hub_record_covers_the_model_map(fake_hub):
+    """tests/hub_accuracy_maps.json records, for every pinned validator, the hub map's sha256 at that revision, and it
+    is MODEL_MAP's; the stand-in hub serves each from the committed maps. A new pin needs its hash read from the hub."""
+    record = json.load(open("tests/hub_accuracy_maps.json"))["maps"]
+    for label_type, entry in model_map.MODEL_MAP["validator_models"].items():
+        repo, revision = _hub_key(label_type)
+        assert record.get(repo, {}).get(revision) == entry["accuracy_map_sha256"], label_type
+        assert _hub_key(label_type) in fake_hub.maps, label_type
+    main.check_accuracy_maps()
+    assert sorted(c[2] for c in fake_hub.calls) == sorted(e["revision"] for e in model_map.MODEL_MAP["validator_models"].values())
+    assert {c[1] for c in fake_hub.calls} == {model_map.HUB_ACCURACY_MAP}
+
+
+def test_startup_refuses_two_swapped_maps_even_with_every_hash_updated(monkeypatch, tmp_path):
+    """Swapping crosswalk.json and curbramp.json and updating both sha256s in MODEL_MAP and provenance.json passes
+    every in-repo check; the hub still holds each revision's own map, so startup refuses it."""
+    scratch = _scratch_maps(tmp_path, monkeypatch)
+    cw, cr = (scratch / "crosswalk.json").read_bytes(), (scratch / "curbramp.json").read_bytes()
+    (scratch / "crosswalk.json").write_bytes(cr)
+    (scratch / "curbramp.json").write_bytes(cw)
+    _rebind(scratch, "crosswalk", monkeypatch)
+    _rebind(scratch, "curbramp", monkeypatch)
+    for t in ("crosswalk", "curbramp"):
+        with pytest.raises(RuntimeError, match=f"validator {t} .*confidence_precision_map.json at revision "
+                                               f"{_hub_key(t)[1]} has sha256 .* not MODEL_MAP's"):
+            main.check_accuracy_maps([t])
+
+
+def test_startup_refuses_old_weights_repinned_with_the_new_map(monkeypatch, tmp_path, fake_hub):
+    """Re-pinning the 2025-08 crosswalk weights in both MODEL_MAP and provenance.json while keeping the new map: that
+    revision has no hub map (as on the real hub), so startup refuses it; had it one, a different map is refused too."""
+    scratch = _scratch_maps(tmp_path, monkeypatch)
+    for field, value in OLD_CROSSWALK.items():
+        monkeypatch.setitem(model_map.MODEL_MAP["validator_models"]["crosswalk"], field, value)
+    prov = json.load(open(scratch / "provenance.json"))
+    prov["maps"]["crosswalk"].update(validator_revision=OLD_CROSSWALK["revision"],
+                                     training_date=OLD_CROSSWALK["training_date"])
+    (scratch / "provenance.json").write_text(json.dumps(prov))
+    with pytest.raises(RuntimeError, match=f"validator crosswalk: cannot get confidence_precision_map.json at "
+                                           f"revision {OLD_CROSSWALK['revision']}"):
+        main.check_accuracy_maps(["crosswalk"])
+    old_map = json.load(open(scratch / "crosswalk.json"))
+    old_map["correct"]["1.0"] = 0.99                                 # any other map, as fitted for the old weights
+    fake_hub.maps[_hub_key("crosswalk")] = json.dumps(old_map).encode()
+    with pytest.raises(RuntimeError, match="has sha256 .* not MODEL_MAP's accuracy_map_sha256"):
+        main.check_accuracy_maps(["crosswalk"])
+
+
+@pytest.mark.parametrize("field, value", [("training_date", "08-16-2025"), ("model_id", "sidewalk-validator-ai-curbramp")])
+def test_startup_refuses_provenance_metadata_drift(monkeypatch, tmp_path, field, value):
+    """provenance.json's training_date and model_id must be MODEL_MAP's: either drifting alone is refused."""
+    scratch = _scratch_maps(tmp_path, monkeypatch)
+    prov = json.load(open(scratch / "provenance.json"))
+    prov["maps"]["crosswalk"][field] = value
+    (scratch / "provenance.json").write_text(json.dumps(prov))
+    with pytest.raises(RuntimeError, match=f"crosswalk {field} '{value}' is not MODEL_MAP's"):
+        main.check_accuracy_maps(["crosswalk"])
+
+
+@pytest.mark.parametrize("field", ["training_date", "model_id"])
+def test_startup_refuses_a_provenance_entry_missing_metadata(monkeypatch, tmp_path, field):
+    """An absent training_date or model_id is refused like a wrong one, not skipped."""
+    scratch = _scratch_maps(tmp_path, monkeypatch)
+    prov = json.load(open(scratch / "provenance.json"))
+    del prov["maps"]["crosswalk"][field]
+    (scratch / "provenance.json").write_text(json.dumps(prov))
+    with pytest.raises(RuntimeError, match=f"crosswalk {field} None is not MODEL_MAP's"):
+        main.check_accuracy_maps(["crosswalk"])
+
+
+def _run_download(monkeypatch, tmp_path, fake_hub, calls=None):
+    """Runs download_hf_models.py against stand-in downloads (snapshot_download writes what the stand-in hub holds at
+    each revision); appends every call, in order, to ``calls`` as (function, repo, allow_patterns or filename)."""
+    calls = [] if calls is None else calls
+
+    def snapshot_download(repo_id, revision=None, allow_patterns=None):
+        calls.append(("snapshot_download", repo_id, allow_patterns))
+        folder = tmp_path / "snapshots" / repo_id / revision
+        folder.mkdir(parents=True, exist_ok=True)
+        if model_map.HUB_ACCURACY_MAP in allow_patterns and (repo_id, revision) in fake_hub.maps:
+            (folder / model_map.HUB_ACCURACY_MAP).write_bytes(fake_hub.maps[(repo_id, revision)])
+        return str(folder)
+
+    def hf_hub_download(repo_id, filename, revision=None):
+        calls.append(("hf_hub_download", repo_id, filename))
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub",
+                        types.SimpleNamespace(hf_hub_download=hf_hub_download, snapshot_download=snapshot_download))
+    runpy.run_path("download_hf_models.py", run_name="__main__")
+    return calls
+
+
+def test_download_hf_models_checks_the_hub_map(monkeypatch, tmp_path, fake_hub):
+    """The image build downloads each validator's hub map and fails unless its sha256 is MODEL_MAP's: a map hash
+    swapped between two entries, or a revision with no map, stops the build."""
+    calls = _run_download(monkeypatch, tmp_path, fake_hub)
+    n = len(main.VALIDATOR_LABEL_TYPES)
+    assert [c[2] for c in calls[:n]] == [[model_map.HUB_ACCURACY_MAP]] * n         # every map, before any weights
+    assert len(calls) == 2 * n + len(model_map.MODEL_MAP["tagger_models"])
+    vm = model_map.MODEL_MAP["validator_models"]
+    cw, cr = vm["crosswalk"]["accuracy_map_sha256"], vm["curbramp"]["accuracy_map_sha256"]
+    monkeypatch.setitem(vm["crosswalk"], "accuracy_map_sha256", cr)
+    monkeypatch.setitem(vm["curbramp"], "accuracy_map_sha256", cw)
+    with pytest.raises(RuntimeError, match="validator_models crosswalk .* not MODEL_MAP's accuracy_map_sha256"):
+        _run_download(monkeypatch, tmp_path, fake_hub)
+    monkeypatch.setitem(vm["crosswalk"], "accuracy_map_sha256", cw)
+    monkeypatch.setitem(vm["curbramp"], "accuracy_map_sha256", cr)
+    monkeypatch.setitem(vm["crosswalk"], "revision", OLD_CROSSWALK["revision"])
+    with pytest.raises(RuntimeError, match=f"revision {OLD_CROSSWALK['revision']} has no confidence_precision_map.json"):
+        _run_download(monkeypatch, tmp_path, fake_hub)
+
+
+def test_download_hf_models_checks_every_map_before_any_weights(monkeypatch, tmp_path, fake_hub):
+    """A mismatch on the last validator stops the build before a single tagger or validator weight is requested."""
+    last = list(model_map.MODEL_MAP["validator_models"])[-1]
+    monkeypatch.setitem(model_map.MODEL_MAP["validator_models"][last], "accuracy_map_sha256", "0" * 64)
+    calls = []
+    with pytest.raises(RuntimeError, match=f"validator_models {last} .* not MODEL_MAP's"):
+        _run_download(monkeypatch, tmp_path, fake_hub, calls)
+    assert len(calls) == len(main.VALIDATOR_LABEL_TYPES)
+    assert all(c[0] == "snapshot_download" and c[2] == [model_map.HUB_ACCURACY_MAP] for c in calls)
+
+
+def test_live_hub_check_script(fake_hub, capsys):
+    """regression/check_hub_maps.py (run by hand against the real hub) passes on the committed set and names a
+    validator whose hub map is not what MODEL_MAP, the map file and the record say; here against the stand-in hub."""
+    with pytest.raises(SystemExit) as done:
+        runpy.run_path("regression/check_hub_maps.py", run_name="__main__")
+    assert done.value.code == 0 and capsys.readouterr().out.count("ok ") == len(main.VALIDATOR_LABEL_TYPES)
+    fake_hub.maps[_hub_key("obstacle")] = b"{}"                      # the hub holds another map than all three say
+    with pytest.raises(SystemExit) as done:
+        runpy.run_path("regression/check_hub_maps.py", run_name="__main__")
+    assert done.value.code == 1 and "FAIL obstacle" in capsys.readouterr().err
 
 
 def test_load_models_runs_the_map_check_first(monkeypatch):
