@@ -301,7 +301,9 @@ def process():
         panorama = Panorama(panorama_id, cached_image_path=cached_image_path)
     g.pano_source = panorama.image_source
     if panorama.panorama_image is None:
-        return jsonify({"error": f"Failed to fetch panorama"}), 502
+        # SidewalkWebpage's AiService matches this exact message to stop retrying the label for good, and treats any
+        # other 502 (Apache's while this server is down) as a passing failure. Keep the two in step.
+        return jsonify({"error": "Failed to fetch panorama"}), 502
     with timed("project"):
         width = panorama.panorama_image.shape[1]
         # The shared geometry (sidewalk-panorama-tools): a 90 degree view aimed at the label, 2048 px for the 8192 px
