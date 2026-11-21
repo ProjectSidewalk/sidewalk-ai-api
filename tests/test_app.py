@@ -151,6 +151,81 @@ def test_malformed_body_is_a_json_400(app_with):
     assert r.status_code == 400 and "error" in r.get_json()
 
 
+@pytest.fixture
+def pano_requests(app_with, monkeypatch):
+    """Returns (client, depth stub, paths): the app with a cache folder set, and every cache path a request looks up."""
+    client, depth, _ = app_with
+    paths = []
+    fake_panorama = main.Panorama
+
+    def recording_panorama(pano_id, cached_image_path=None):
+        paths.append(cached_image_path)
+        return fake_panorama(pano_id, cached_image_path)
+
+    monkeypatch.setattr(main, "Panorama", recording_panorama)
+    monkeypatch.setattr(main, "SCRAPES_DIR", "/panos")
+    return client, depth, paths
+
+
+@pytest.mark.parametrize("panorama_id", [
+    "../../../../etc/x", "..", "..abc", "ab/cd", "abc&zoom=0#", "abc\n", "", "a" * 129,
+])
+def test_an_impossible_panorama_id_is_a_missing_panorama(pano_requests, panorama_id):
+    """panorama_id goes into a file path and a URL, so anything but a plain id is refused before either is built, with
+    the answer a missing panorama gets (the one the website stops retrying a label on)."""
+    client, depth, paths = pano_requests
+    r = post(client, panorama_id=panorama_id, city="chicago-il")
+    assert r.status_code == 502 and r.get_json() == {"error": "Failed to fetch panorama"}
+    assert paths == [] and depth.images == []
+
+
+@pytest.mark.parametrize("city", ["/etc", "../chicago-il", "Chicago", "a" * 65])
+def test_a_city_that_could_leave_the_cache_folder_is_400(pano_requests, city):
+    client, depth, paths = pano_requests
+    r = post(client, city=city)
+    assert r.status_code == 400 and "city must be" in r.get_json()["error"]
+    assert paths == [] and depth.images == []
+
+
+@pytest.mark.parametrize("panorama_id", [
+    "rZufe3aXwB2Syor0lKAqqw",                                             # Google's own panoramas: 22 characters
+    "-8b5AFOGwbpCBubGUgkMvA",
+    "CAoSHENJQUJJaERMSEVCaUg2dWZfTThBWVpHa3V1YlY.",                       # user-contributed ones: longer, some with a dot
+    "CAoSLEFGMVFpcFBSOFlxMVJEWFNvSGRCV1Jma3ZGSy1rWW83TUZLUU1JR0lyc3RM",
+])
+def test_real_panorama_ids_are_looked_up_under_their_city(pano_requests, panorama_id):
+    client, _, paths = pano_requests
+    assert post(client, panorama_id=panorama_id, city="chicago-il").status_code == 200
+    assert paths == [f"/panos/chicago-il/{panorama_id[:2]}/{panorama_id}.jpg"]
+
+
+def test_no_city_means_no_cache_lookup(pano_requests):
+    client, _, paths = pano_requests
+    assert post(client).status_code == 200 and post(client, city="").status_code == 200
+    assert paths == [None, None]
+
+
+def test_oversized_body_is_a_json_413(app_with):
+    client, depth, _ = app_with
+    r = post(client, city="a" * (main.MAX_REQUEST_BYTES + 1))
+    assert r.status_code == 413 and "error" in r.get_json()
+    assert depth.images == []
+
+
+def test_inference_error_is_logged_with_its_traceback(app_with, monkeypatch, caplog):
+    """The caller gets the short message; the traceback goes to the log, where `docker logs` shows it."""
+    client, depth, _ = app_with
+
+    def out_of_memory(image):
+        raise RuntimeError("CUDA out of memory")
+
+    monkeypatch.setattr(depth.validator, "validate", out_of_memory)
+    r = post(client)
+    assert r.status_code == 500 and "CUDA out of memory" in r.get_json()["error"]
+    assert "Validator failed for curbramp label on panorama testpano" in caplog.text
+    assert "RuntimeError: CUDA out of memory" in caplog.text
+
+
 def test_models_load_only_without_stand_ins(monkeypatch):
     """create_app() with no argument is the only path that loads models, and it refuses to start without a GPU."""
     monkeypatch.delenv("SIDEWALK_ALLOW_CPU", raising=False)
