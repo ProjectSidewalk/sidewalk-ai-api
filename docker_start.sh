@@ -23,7 +23,9 @@ esac
 
 # Give requests in progress up to 30 s to finish.
 docker stop -t 30 $IMAGE >/dev/null 2>&1; docker rm -f $IMAGE >/dev/null 2>&1
+# The log is capped at 5 files of 50 MB: every request writes a line, so without a cap anyone could fill the disk.
 docker run --gpus all --runtime nvidia -d -p 127.0.0.1:$PORT:5000 --name $IMAGE $RUN_OPTS \
+      --log-driver json-file --log-opt max-size=50m --log-opt max-file=5 \
       -e SIDEWALK_AI_API_KEY \
       -e SIDEWALK_SCRAPES_DIR=$PANOS_DIR \
       -v $PANOS_DIR:$PANOS_DIR:ro \

@@ -46,7 +46,7 @@ docker  build  -t  sidewalk-ai-api  .
 
 ## Run
 
-Every request needs a password, set as `SIDEWALK_AI_API_KEY` on both this server and the Sidewalk website. Keep it in a file only you can read, which `docker_start.sh` loads on its own:
+Every request needs a password, set as `SIDEWALK_AI_API_KEY` on both this server and the Sidewalk website. Make it long and random (`openssl rand -hex 32`): nothing slows down guessing, so its length is the protection. Keep it in a file only you can read, which `docker_start.sh` loads on its own:
 
 ```bash
 
@@ -56,12 +56,12 @@ chmod  600  ~/.sidewalk-ai-api.env
 
 ```
 
-Or, to run the container by hand, export it first (rather than typing it into the `docker run` line, so it stays out of your shell history):
+Or, to run the container by hand, export it first (rather than typing it into the `docker run` line, so it stays out of your shell history). Keep the `127.0.0.1:` in front of the port: without it Docker opens the port to every machine that can reach this one, with no https.
 
 ```bash
 
 export  SIDEWALK_AI_API_KEY=<your-key>
-docker  run  --gpus  all  --runtime  nvidia  -d  -p  5000:5000  -e  SIDEWALK_AI_API_KEY  sidewalk-ai-api
+docker  run  --gpus  all  --runtime  nvidia  -d  -p  127.0.0.1:5000:5000  -e  SIDEWALK_AI_API_KEY  sidewalk-ai-api
 
 ```
 
@@ -129,10 +129,16 @@ Last checked against the server 2026-10-26. Nothing here is secret; the key neve
   instance beside production (another ~9-10 GB of VRAM; check `nvidia-smi`). `python3 regression/compare.py` then
   sends a fixed set of labels to both and reports every output that changed (its docstring explains the results).
   Remove it with `docker rm -f sidewalk-ai-api-dev`.
-- **Deploying.** In the production clone, on `main` (or a tag: `git fetch --tags && git checkout <tag>`): `git pull`,
+- **Deploying.** In the production clone, on `main` (or a tag: `git fetch --tags && git checkout <tag>`): `git fetch`,
+  then `git log --oneline HEAD..origin/main` to check the commits are ones you expect (the build runs whatever
+  `main` holds), `git pull`,
   `./docker_build.sh`, `./docker_start.sh`. Expect a minute or two of 502s while the models load. Check
   `docker logs -f sidewalk-ai-api`. Every response, and every `label_ai_assessment` row on the website, carries
   `api_version` and the model revisions, so the database shows what is live.
+- **Logs.** `docker logs sidewalk-ai-api` has one line per request, rejected ones included: the caller's address as
+  Apache reports it (`-` for a request that didn't come through Apache), the time, the request, the status, the
+  response size and the time taken. A failed inference also leaves its traceback there. `docker_start.sh` caps the
+  log at 5 files of 50 MB.
 - **Handing production to another account.** Only one daemon can hold port 60654. The new owner does setup steps 1-6
   and runs `./docker_build.sh`; the current owner runs
   `docker update --restart=no sidewalk-ai-api && docker stop -t 30 sidewalk-ai-api`; the new owner then runs

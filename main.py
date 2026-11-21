@@ -1,7 +1,7 @@
 from collections import namedtuple
 from contextlib import contextmanager
 from flask import Blueprint, Flask, current_app, g, request, jsonify
-from werkzeug.exceptions import BadRequest
+from werkzeug.exceptions import BadRequest, RequestEntityTooLarge
 from PIL import Image
 from sidewalk_ai_api.panorama import Panorama
 from sidewalk_ai_api.model_map import (HOLD_BACK_CAP, HUB_ACCURACY_MAP, MODEL_MAP, accuracy_map_sha256,
@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import os
+import re
 import sys
 import time
 import torch
@@ -36,7 +37,6 @@ def require_api_key():
     """Rejects any request without the right password, before doing any real work."""
     provided = request.headers.get("Authorization", "")
     if not API_KEY or not hmac.compare_digest(provided.encode(), EXPECTED_AUTH_HEADER.encode()):
-        logger.warning(f"Rejected request from {request.remote_addr}: missing or invalid API key")
         return jsonify({"error": "Missing or invalid API key"}), 401, {"WWW-Authenticate": "Bearer"}
     g.start = time.perf_counter()
     g.timings = {}
@@ -177,6 +177,10 @@ def load_models():
     )
 
 
+# A request is a handful of short form fields, so anything bigger than this is refused unread.
+MAX_REQUEST_BYTES = 64 * 1024
+
+
 def create_app(models=None):
     """Builds the app. Production (ignition.sh: gunicorn "main:create_app()") passes nothing, so the real models
     load here, at startup; tests pass a Models of stand-ins.
@@ -187,9 +191,21 @@ def create_app(models=None):
         app = create_app(Models(stub_depth, {}, validators))  # tests
     """
     app = Flask(__name__)
+    app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
     app.config["MODELS"] = load_models() if models is None else models
     app.register_blueprint(api)
     return app
+
+
+# panorama_id and city become part of a file path (the cache lookup), and panorama_id part of a URL (Google's tile
+# server), so both are limited to the characters real ids use. A panorama id may contain dots but not start with one,
+# so neither it nor its two-letter cache folder can ever be "..".
+PANORAMA_ID_PATTERN = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}")
+CITY_PATTERN = re.compile(r"[a-z0-9-]{1,64}")
+
+# SidewalkWebpage's AiService matches this exact message to stop retrying the label for good, and treats any other 502
+# (Apache's while this server is down) as a passing failure. Keep the two in step.
+PANO_FETCH_FAILED = "Failed to fetch panorama"
 
 
 # Rig-tilt correction (docs/API_USAGE.md, "Camera pose and tilt correction"). The default beta is the fraction of the
@@ -209,6 +225,11 @@ class InvalidField(BadRequest):
 @api.app_errorhandler(BadRequest)
 def bad_request(e):
     return jsonify({"error": e.description}), 400
+
+
+@api.app_errorhandler(RequestEntityTooLarge)
+def request_too_large(e):
+    return jsonify({"error": f"Request body is larger than {MAX_REQUEST_BYTES} bytes"}), 413
 
 
 def parse_float(name, default=None, nan_is_none=False, lo=None, hi=None, required=False):
@@ -291,7 +312,12 @@ def process():
     camera_pitch, camera_roll, tilt_beta, coord_frame = parse_tilt_fields()
 
     panorama_id = request.form["panorama_id"]
+    if not PANORAMA_ID_PATTERN.fullmatch(panorama_id):
+        # No panorama has an id like this, so it gets the answer a missing panorama gets, without looking for it.
+        return jsonify({"error": PANO_FETCH_FAILED}), 502
     city = request.form.get("city")
+    if city and not CITY_PATTERN.fullmatch(city):
+        raise InvalidField("city must be 1 to 64 lowercase letters, digits or '-'")
 
     cached_image_path = None
     if SCRAPES_DIR and city and len(panorama_id) >= 2:
@@ -301,9 +327,7 @@ def process():
         panorama = Panorama(panorama_id, cached_image_path=cached_image_path)
     g.pano_source = panorama.image_source
     if panorama.panorama_image is None:
-        # SidewalkWebpage's AiService matches this exact message to stop retrying the label for good, and treats any
-        # other 502 (Apache's while this server is down) as a passing failure. Keep the two in step.
-        return jsonify({"error": "Failed to fetch panorama"}), 502
+        return jsonify({"error": PANO_FETCH_FAILED}), 502
     with timed("project"):
         width = panorama.panorama_image.shape[1]
         # The shared geometry (sidewalk-panorama-tools): a 90 degree view aimed at the label, 2048 px for the 8192 px
@@ -371,6 +395,7 @@ def process():
                 "tagger_revision": MODEL_MAP["tagger_models"][label_type]["revision"],
             })
         except Exception as e:
+            logger.exception(f"Tagger failed for {label_type} label on panorama {panorama_id}")
             return jsonify({"error": f"Inference error: {str(e)}"}), 500
 
     # Perform validation if label_type is in VALIDATOR_LABEL_TYPES
@@ -399,6 +424,7 @@ def process():
             "validator_revision": MODEL_MAP["validator_models"][label_type]["revision"],
         })
     except Exception as e:
+        logger.exception(f"Validator failed for {label_type} label on panorama {panorama_id}")
         return jsonify({"error": f"validation error: {str(e)}"}), 500
 
     response.update({
