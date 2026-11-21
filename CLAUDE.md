@@ -30,7 +30,7 @@ Run locally without Docker (requires CUDA, the submodule, and downloaded checkpo
 ```bash
 export SIDEWALK_AI_API_KEY=<key>          # required; without it every request is a 401
 export SIDEWALK_ALLOW_CPU=1                # only on a machine without a GPU
-gunicorn -w 1 -b 0.0.0.0:5000 --timeout 120 "main:create_app()"   # production form (see ignition.sh)
+bash ignition.sh                          # production form: gunicorn, 1 worker, access log on stdout
 python main.py                            # dev form, Flask's built-in server
 ```
 
@@ -68,7 +68,7 @@ All taggers, validators, and the depth model are instantiated **once at startup*
 
 - **Auth:** a `before_app_request` hook on the `api` blueprint in `main.py` requires `Authorization: Bearer <SIDEWALK_AI_API_KEY>` on every request (constant-time compare, 401 otherwise, fails closed when the env var is unset). The Sidewalk website sends the same key from its own `SIDEWALK_AI_API_KEY` env var, so rotate both together. Never commit the key or put it on a `docker run` command line.
 - **Untrusted input:** `panorama_id` comes from whatever a website user submitted, and it and `city` go into the cache file path and (the id) Google's tile URL, so `/process` only accepts ids matching `PANORAMA_ID_PATTERN` / `CITY_PATTERN` in `main.py`. A bad `city` is a 400; a bad `panorama_id` gets the missing-panorama 502, so the website records the label as never assessable instead of retrying it every night. Real Street View ids are 22 to 64 characters and may contain a dot. Any new free-text field needs the same kind of check before it reaches a path, URL or shell. Bodies over `MAX_REQUEST_BYTES` (64 KB) get a 413.
-- **Logs:** gunicorn's access log (`ACCESS_LOG_FORMAT` in `ignition.sh`) writes one line per request with the address from Apache's `X-Forwarded-For`; `request.remote_addr` is always Docker's own address, so never log that. Inference failures are logged with `logger.exception` and still return their message in the 500.
+- **Logs:** gunicorn's access log (`ACCESS_LOG_FORMAT` in `ignition.sh`) writes one line per answered request with the `X-Forwarded-For` header, of which only the last address is Apache's (earlier ones are the caller's own claim); `request.remote_addr` is always Docker's own address, so never log that. Inference failures are logged with `logger.exception` and still return their message in the 500.
 - `x` and `y` in API requests are **normalized** equirectangular coordinates in `[0, 1]`, not pixels. They get multiplied by the fixed 8192×4096 panorama size.
 - The set of supported label types is hardcoded in two lists in `main.py`: `TAGGER_LABEL_TYPES` (4 types) and `VALIDATOR_LABEL_TYPES` (5 types, includes `nocurbramp`). Adding a new label type requires updating both lists, `mappings.json` and `tag_thresholds.json` (for taggers), `accuracy_mappings/`, and `MODEL_MAP` in `sidewalk_ai_api/model_map.py`.
 - `MODEL_MAP` carries `model_id` and `training_date` strings (MM-DD-YYYY) returned in the API response — keep these in sync when updating checkpoints. `MODEL_MAP` is also what the API loads: each entry carries the HuggingFace commit `revision` (taggers also a `repo`), returned as `tagger_revision`/`validator_revision`; a new model version must update it, or the API keeps serving the old weights. `download_models.sh` pins the depth checkpoint URL to a repo commit.

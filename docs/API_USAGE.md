@@ -108,6 +108,6 @@ Errors return a JSON object with an `error` message.
 | :---- | :-------------------------------------------------------------------------------------------- |
 | `400` | A required parameter is missing, `x`/`y` is outside 0–1, `label_type` isn't supported, `city` has a character or length outside the ones listed above, or a pose field is invalid (`camera_pitch`/`camera_roll` not a number, infinite or beyond ±30, `tilt_beta` not a number, `NaN`, infinite or outside 0–1.5, or `coord_frame` not `level`/`rig`). |
 | `401` | The API key is missing or wrong.                                                               |
-| `413` | The request body is larger than 64 KB.                                                         |
+| `413` | The request body is larger than 64 KB. The server answers without reading the body, so for a body of about 1 MB or more the https proxy returns its own `502` instead. |
 | `500` | Model inference failed.                                                                        |
 | `502` | The panorama couldn't be loaded from the cache or downloaded from Google (e.g. it no longer exists), or `panorama_id` has a character or length no panorama id has. |
